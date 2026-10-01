@@ -1,0 +1,5 @@
+local/
+artifacts/
+*.bak
+__pycache__/
+.DS_Store

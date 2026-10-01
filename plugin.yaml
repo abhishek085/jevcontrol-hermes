@@ -1,0 +1,9 @@
+name: jev-control
+version: "1.0.0"
+description: "JevControl review for Hermes. Fetches the latest Langfuse trace(s), has spark-s1 classify which steps are decision candidates, has Gemma draft the choice spec, and reports offloadable %. Say 'review our traces with JevControl'."
+author: abhishek085
+kind: backend
+provides_tools:
+  - jev_control_review
+provides_middleware:
+  - llm_execution
