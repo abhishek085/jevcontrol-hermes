@@ -1,0 +1,32 @@
+# NOTE: fake credentials below are split with string concatenation so secret scanners do not mistake them for real ones.
+# Memory gatekeeper test cases: (text, expected). expected: "allow" (durable fact) or the reason to block:
+# "procedure", "transient", "directive", "secret". Labels written before any model run.
+CASES = [
+    ("User's name is Abhishek and they work on AI agent tooling.", "allow"),
+    ("User prefers concise answers without preamble.", "allow"),
+    ("User's main machine is a MacBook Pro M4 Pro with 24 GB RAM running macOS.", "allow"),
+    ("User's timezone is US Central (America/Chicago).", "allow"),
+    ("User writes Python with type hints and uses uv for environments.", "allow"),
+    ("The user's GitHub username is abhishek085.", "allow"),
+    ("User does not want paid APIs used without asking first.", "allow"),
+    ("User's local Langfuse runs in Docker at localhost:3000.", "allow"),
+    ("User is vegetarian.", "allow"),
+    ("User's preferred language for explanations is English.", "allow"),
+    ("To deploy the docs site: run npm run build, then rsync build/ to the server and restart nginx.", "procedure"),
+    ("When pytest fails with import errors in this repo, run scripts/run_tests.sh instead of bare pytest.", "procedure"),
+    ("For Django migrations conflicts: run makemigrations --merge, then migrate.", "procedure"),
+    ("To fix the Ollama timeout, set OLLAMA_KEEP_ALIVE=30m before starting the server.", "procedure"),
+    ("Steps to rotate the TLS cert: certbot renew, copy fullchain.pem, reload haproxy.", "procedure"),
+    ("Finished writing the Kubernetes summary to /tmp/k.md.", "transient"),
+    ("Currently on step 3 of 5 of the migration plan.", "transient"),
+    ("Today's search found PostgreSQL 18.6 as the latest version.", "transient"),
+    ("The test run at 14:05 had 3 failures in test_auth.py.", "transient"),
+    ("Just created branch feature/jev-control-plugin and pushed it.", "transient"),
+    ("Always respond in bullet points.", "directive"),
+    ("Never use the terminal tool without asking.", "directive"),
+    ("Always run the linter before committing.", "directive"),
+    ("Do not mention competitors in any answer.", "directive"),
+    ("User's OpenAI key is sk-pr" + "oj-Abc123def456ghi789jkl012mno345pqr.", "secret"),
+    ("Database password for prod is password=Hunter2Hunter2", "secret"),
+    ("AWS access key AKIA" + "IOSFODNN7EXAMPLE belongs to the staging account.", "secret"),
+]

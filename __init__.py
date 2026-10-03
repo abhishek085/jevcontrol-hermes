@@ -16,14 +16,19 @@ from types import SimpleNamespace as _NS
 
 import httpx
 
-from tools.registry import registry, tool_error, tool_result
 
 _CTX = None
 _DEFAULTS = {"spark_url": "http://localhost:8102/v1",
-             "spark_model": "/Users/abhishekrai/Code/JevControl/models/spark-s1-4b-v6-mlx-8bit",
+             "spark_model": "spark-s1", "spark_api": "chat",
              "langfuse_url": "http://localhost:3000", "tau": 0.8, "log_content": False,
              "routing_mode": "off", "route_tools": None,
-             "cascade_tau": 0.9, "skip_families": None, "keep_warm_s": 0}
+             "cascade_tau": 0.9, "skip_families": None, "keep_warm_s": 0, "log_timing": False,
+             "guard_host": "127.0.0.1", "guard_port": 8765, "guard_approve_tau": 0.9, "guard_deny_tau": 0.7,
+             "guard_timeout_s": 10, "jev_timeout_s": 10,
+             "privacy_guard": "off", "privacy_tau": 0.8, "memory_gate": "off", "memory_tau": 0.7,
+             "search_pick": "off", "search_tau": 0.15, "search_min_keep": 2, "search_max_keep": 10,
+             "compressor": False, "compress_threshold": 0.5, "compress_keep_last": 6, "compress_need_tau": 0.5,
+             "compress_trim_chars": 4000, "compress_threshold_tokens": 0}
 _LETTERS = string.ascii_uppercase
 _FLOOR = -30.0
 _SYSTEM = ("You are open-spark-Jev, a System One decision model. You read a STATE and answer one QUESTION about it by "
@@ -67,6 +72,8 @@ def _ms(a: str | None, b: str | None) -> float:
 # ---- spark-s1 menu readout (byte-compatible with the prompt spark-s1 was trained on) ----
 def readout(state: str, options: dict[str, str], instructions: str = _QUESTION) -> dict:
     labels = list(options)
+    if str(_cfg("spark_api")).lower() == "decide":
+        return _readout_decide(state, options, instructions)
     defs = "\n".join(f"- {k}: {v}" for k, v in options.items() if v)
     menu = "\n".join(f"{_LETTERS[i]}. {k}" for i, k in enumerate(labels))
     user = (f"### State\n<<<STATE\n{state}\nSTATE>>>\n\n### Question (choice)\n{instructions}\n"
@@ -95,6 +102,27 @@ def readout(state: str, options: dict[str, str], instructions: str = _QUESTION) 
             "prompt_tokens": int(data.get("usage", {}).get("prompt_tokens", 0)), "ms": ms}
 
 
+def _readout_decide(state: str, options: dict[str, str], instructions: str) -> dict:
+    """Typed decision API (POST {spark_url}/decide): the server renders the menu and returns per-option probabilities."""
+    q = {"id": "q", "type": "choice", "instructions": instructions,
+         "options": [{"id": k, "definition": v} for k, v in options.items()]}
+    body = {"state": state, "questions": [q]}
+    if _cfg("spark_model") and _cfg("spark_model") != "spark-s1":
+        body["model"] = _cfg("spark_model")
+    t = time.perf_counter()
+    for attempt in (0, 1):  # one retry: the remote server returned sporadic 500s that did not reproduce
+        r = httpx.post(f"{_cfg('spark_url')}/decide", json=body, timeout=60)
+        if r.status_code < 500 or attempt:
+            break
+    r.raise_for_status()
+    ms = (time.perf_counter() - t) * 1000
+    d = r.json()["decisions"]["q"]
+    probs = {k: float(v) for k, v in (d.get("probabilities") or {}).items()}
+    pick = d.get("selected") or max(probs, key=probs.get)
+    return {"pick": pick, "p": probs.get(pick, float(d.get("confidence") or 0.0)), "label_mass": 1.0,
+            "prompt_tokens": 0, "ms": ms, "server_ms": d.get("latency_ms")}
+
+
 # ---- Hermes trace -> decision steps ----
 def _kind_of(params: dict | None) -> str:
     """'none' / 'fixed' when a tool's arguments are empty or enum-only, else 'free' (the LLM must write them)."""
@@ -104,13 +132,23 @@ def _kind_of(params: dict | None) -> str:
     return "fixed" if all("enum" in p for p in props.values()) else "free"
 
 
+def _schema(tool: str) -> dict:
+    """Tool schema for the offline review only. Hermes internals are not plugin API, so a moved registry just
+    degrades the review (arguments counted as free text) instead of breaking plugin load."""
+    try:
+        from tools.registry import registry
+        return registry.get_schema(tool) or {}
+    except Exception:
+        return {}
+
+
 def _arg_kind(tool: str) -> str:
-    schema = registry.get_schema(tool)
+    schema = _schema(tool)
     return _kind_of(schema.get("parameters")) if schema else "free"
 
 
 def _tool_desc(tool: str) -> str:
-    return _clip((registry.get_schema(tool) or {}).get("description", ""), 120)
+    return _clip(_schema(tool).get("description", ""), 120)
 
 
 def _steps(trace: dict) -> list[dict]:
@@ -364,6 +402,8 @@ def _extract_query(req: str) -> str:
     t = re.sub(r"\b(?:a|an|the)\s+(?:[\w-]+\s+){0,3}(?:summary|note|explainer|table|comparison|overview)\b", " ", t, flags=re.I)
     t = re.sub(r"\b(online|on the web|the web)\b", " ", t, flags=re.I)
     words = [w for w in t.replace(",", " ").split()[:18] if w.strip(".")]
+    while words and words[0].lower() in {"the", "a", "an"}:
+        words.pop(0)
     while words and words[-1].strip(".").lower() in {"to", "in", "into", "as", "with", "at", "for", "and", "then", "it", "a", "an"}:
         words.pop()
     return " ".join(words).strip(" ,.")
@@ -420,7 +460,7 @@ def _cascade(request: dict, ctx: dict):
 def _llm_exec(*, request, next_call, **ctx):
     mode = str(_cfg("routing_mode") or "off").strip().lower()  # YAML parses a bare `off` as False
     if mode in ("off", "false", "none", "0") or ctx.get("api_mode") != "chat_completions":
-        return next_call(request)
+        return _timed(request, next_call, ctx) if _cfg("log_timing") else next_call(request)
     v = None
     note = None
     if mode == "cascade":
@@ -442,15 +482,23 @@ def _llm_exec(*, request, next_call, **ctx):
         _log({"event": "routed", "session": ctx.get("session_id"), "tool": v["pick"], "p": round(v["p"], 3), "args": v["args"],
               "spark_tokens": v["spark_tokens"], "spark_ms": round(v["spark_ms"])})
         return _synthetic(ctx.get("model"), v["pick"], v["args"])
+    return _timed(request, next_call, ctx, mode=mode, v=v, note=note)
+
+
+def _timed(request, next_call, ctx, mode="off", v=None, note=None):
+    """Call the main model and log its duration and token usage (cached prompt tokens included, so runs can be
+    compared at equal provider-cache state)."""
     t = time.perf_counter()
     resp = next_call(request)
     ms = (time.perf_counter() - t) * 1000
     usage = getattr(resp, "usage", None)
+    details = getattr(usage, "prompt_tokens_details", None)
     choice = resp.choices[0].message if getattr(resp, "choices", None) else None
     actual = ((choice.tool_calls[0].function.name if getattr(choice, "tool_calls", None) else "respond") if choice else None)
-    _log({"event": "llm", "session": ctx.get("session_id"), "spark": v and v["pick"], "p": v and round(v["p"], 3), "actual": actual,
-          "agree": bool(v) and v["pick"] == actual, "llm_ms": round(ms), "llm_in": getattr(usage, "prompt_tokens", 0),
-          "llm_out": getattr(usage, "completion_tokens", 0), "spark_tokens": v and v["spark_tokens"], "spark_ms": v and round(v["spark_ms"]), "cascade": note,
+    _log({"event": "llm", "session": ctx.get("session_id"), "mode": mode, "spark": v and v["pick"], "p": v and round(v["p"], 3),
+          "actual": actual, "agree": bool(v) and v["pick"] == actual, "llm_ms": round(ms), "llm_in": getattr(usage, "prompt_tokens", 0),
+          "llm_cached": getattr(details, "cached_tokens", None), "llm_out": getattr(usage, "completion_tokens", 0),
+          "spark_tokens": v and v["spark_tokens"], "spark_ms": v and round(v["spark_ms"]), "cascade": note,
           **(_capture(request) if mode == "collect" else {})})
     return resp
 
@@ -477,10 +525,10 @@ def _handle_review(args: dict, **_) -> str:
     try:
         traces = fetch_traces(int((args or {}).get("limit") or 1))
         if not traces:
-            return tool_result(analysis="No Langfuse traces found. Run a Hermes task first, then retry.")
-        return tool_result(analysis=render([analyze(t) for t in traces]))
+            return json.dumps({"analysis": "No Langfuse traces found. Run a Hermes task first, then retry."})
+        return json.dumps({"analysis": render([analyze(t) for t in traces])})
     except Exception as e:
-        return tool_error(f"JevControl review failed: {e}")
+        return json.dumps({"error": f"JevControl review failed: {e}"})
 
 
 def _keep_warm() -> None:
@@ -494,6 +542,91 @@ def _keep_warm() -> None:
         time.sleep(float(_cfg("keep_warm_s")))
 
 
+# ---- reflex features: privacy guard, memory gatekeeper, search picker (each off unless set in config) ----
+_REQUESTS: dict[str, str] = {}  # session id -> latest user message, for the search picker
+
+
+def _mode(key: str) -> str:
+    v = str(_cfg(key) or "off").strip().lower()  # YAML parses a bare `off` as False
+    return "off" if v in ("off", "false", "none", "0", "") else v
+
+
+def _jev():
+    from .jev_client import Jev
+    return Jev(_cfg)
+
+
+def _on_pre_llm_call(session_id: str = "", user_message: str = "", **_) -> None:
+    if session_id and isinstance(user_message, str):
+        if len(_REQUESTS) > 256:
+            _REQUESTS.pop(next(iter(_REQUESTS)))
+        _REQUESTS[session_id] = user_message
+    return None
+
+
+def _on_pre_tool_call(tool_name: str = "", args: dict | None = None, session_id: str = "", **_):
+    feature, mode = ("memory_gate", _mode("memory_gate")) if tool_name == "memory" else ("privacy_guard", _mode("privacy_guard"))
+    if mode == "off":
+        return None
+    try:
+        if feature == "memory_gate":
+            from . import memory_gate
+            v = memory_gate.check(args or {}, _jev(), _cfg)
+            message = v.get("message")
+        else:
+            from . import privacy
+            v = privacy.check(tool_name, args or {}, _jev(), _cfg)
+            message = privacy.block_message(tool_name, v["why"]) if v["verdict"] == "block" else None
+    except Exception as e:  # fail open: a decision-model outage must not stop the agent
+        _log({"event": f"{feature}_error", "tool": tool_name, "error": str(e)[:200]})
+        return None
+    if v.get("layer") != "none":
+        _log({"event": feature, "session": session_id, "tool": tool_name, "mode": mode,
+              **{k: v[k] for k in ("verdict", "why", "layer", "pick", "p", "ms", "picks") if k in v}})
+    if mode == "enforce" and v["verdict"] == "block":
+        return {"action": "block", "message": message}
+    return None
+
+
+def _on_transform_tool_result(tool_name: str = "", args: dict | None = None, result=None, session_id: str = "",
+                              status: str = "", **_):
+    if tool_name != "web_search" or _mode("search_pick") == "off" or not isinstance(result, str):
+        return None
+    try:
+        from . import search_pick
+        new, rec = search_pick.pick(result, str((args or {}).get("query") or ""), _REQUESTS.get(session_id, ""), _jev(), _cfg)
+    except Exception as e:
+        _log({"event": "search_pick_error", "error": str(e)[:200]})
+        return None
+    _log({"event": "search_pick", "session": session_id, "chars_before": len(result),
+          "chars_after": len(new) if new else len(result), **rec})
+    return new
+
+
+def _on_post_auxiliary_call(aux_task: str = "", api_duration: float = 0.0, session_id: str = "", usage=None, **_) -> None:
+    """With log_timing on: record each auxiliary LLM call (compression summary, titling, approval...) without content."""
+    if _cfg("log_timing"):
+        u = usage if isinstance(usage, dict) else {}
+        _log({"event": "aux", "task": aux_task, "session": session_id, "s": round(float(api_duration or 0), 2),
+              "in": u.get("prompt_tokens") or u.get("input_tokens"), "out": u.get("completion_tokens") or u.get("output_tokens")})
+
+
+def _cli(args) -> None:
+    if getattr(args, "jev_command", None) == "serve":
+        from . import guard
+        guard.serve(args.host or _cfg("guard_host"), int(args.port or _cfg("guard_port")), _cfg, _log)
+    else:
+        print("Usage: hermes jev-control serve [--host H] [--port P]")
+
+
+def _cli_args(subparser) -> None:
+    subs = subparser.add_subparsers(dest="jev_command")
+    p = subs.add_parser("serve", help="Serve the decision-model smart-approval guard (OpenAI-compatible, local)")
+    p.add_argument("--host", default=None)
+    p.add_argument("--port", type=int, default=None)
+    subparser.set_defaults(func=_cli)
+
+
 def register(ctx) -> None:
     global _CTX
     _CTX = ctx
@@ -501,3 +634,11 @@ def register(ctx) -> None:
         threading.Thread(target=_keep_warm, name="jev-keep-warm", daemon=True).start()
     ctx.register_middleware("llm_execution", _llm_exec)
     ctx.register_tool(name="jev_control_review", toolset="jev_control", schema=SCHEMA, handler=_handle_review, emoji="🔍")
+    ctx.register_hook("pre_llm_call", _on_pre_llm_call)
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+    ctx.register_hook("transform_tool_result", _on_transform_tool_result)
+    ctx.register_hook("post_auxiliary_call", _on_post_auxiliary_call)
+    if _cfg("compressor") is True or str(_cfg("compressor")).lower() in ("on", "true", "1"):
+        from .compressor import JevCompressor
+        ctx.register_context_engine(JevCompressor(_cfg, _jev(), _log))
+    ctx.register_cli_command(name="jev-control", help="jev-control decision-model tools", setup_fn=_cli_args, handler_fn=_cli)

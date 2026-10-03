@@ -1,9 +1,14 @@
 name: jev-control
-version: "1.0.0"
-description: "JevControl review for Hermes. Fetches the latest Langfuse trace(s), has spark-s1 classify which steps are decision candidates, has Gemma draft the choice spec, and reports offloadable %. Say 'review our traces with JevControl'."
+version: "0.2.0"
+description: "Jev decision layer for Hermes: a fast decision model handles small agent decisions (privacy checks on outgoing data, memory filing, search-result picking, context triage, approvals, optional tool routing) so the LLM only runs where it is needed."
 author: abhishek085
 kind: backend
 provides_tools:
   - jev_control_review
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - transform_tool_result
+  - post_auxiliary_call
 provides_middleware:
   - llm_execution
