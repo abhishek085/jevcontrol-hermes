@@ -5,7 +5,6 @@ Every jev-control feature asks its questions through here, so retries, timeouts 
 
 from __future__ import annotations
 
-import re
 import time
 
 import httpx
@@ -26,9 +25,6 @@ class Jev:
             r = httpx.post(f"{self._cfg('spark_url')}/decide", json=body, timeout=float(self._cfg("jev_timeout_s")))
             if r.status_code < 500 or attempt:
                 break
-            # Workaround: the open-spark-Jev decision server tested here (Oct 2026) returns 500 for any state that
-            # contains the lowercase word "content". Retry once with that word capitalised.
-            body = dict(body, state=re.sub(r"content", "Content", state))
         r.raise_for_status()
         return r.json()["decisions"], (time.perf_counter() - t) * 1000
 

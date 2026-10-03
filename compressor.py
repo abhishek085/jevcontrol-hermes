@@ -34,6 +34,11 @@ class JevCompressor(ContextEngine):
         self.threshold_percent = float(cfg("compress_threshold"))
         self.protect_last_n = int(cfg("compress_keep_last"))
 
+    _session = ""
+
+    def on_session_start(self, session_id: str, **kwargs) -> None:
+        self._session = session_id
+
     @property
     def name(self) -> str:
         return "jev"
@@ -66,7 +71,7 @@ class JevCompressor(ContextEngine):
         cand = [i for i, m in enumerate(msgs[:tail_start]) if m.get("role") == "tool"
                 and len(_text(m.get("content"))) >= _MIN_CHARS and not _text(m.get("content")).startswith("[jev-compressor")]
         if not cand:
-            self._log({"event": "compress_skip", "why": "no old tool output outside the protected tail"})
+            self._log({"event": "compress_skip", "session": self._session, "why": "no old tool output outside the protected tail"})
             return msgs
         users = [_text(m.get("content")) for m in msgs if m.get("role") == "user"]
         task = (users[0][:800] if users else "") + (f"\nLatest request: {users[-1][:400]}" if len(users) > 1 else "")
@@ -114,7 +119,7 @@ class JevCompressor(ContextEngine):
             dropped += 1
         self.compression_count += 1
         self.last_prompt_tokens = 0  # "no real usage yet": the next check uses the rough estimate
-        self._log({"event": "compress", "candidates": len(cand), "dropped": dropped, "trimmed": trimmed,
+        self._log({"event": "compress", "session": self._session, "candidates": len(cand), "dropped": dropped, "trimmed": trimmed,
                    "tokens_before": before, "tokens_after": _tokens(msgs),
                    "ms": round((time.perf_counter() - t0) * 1000)})
         return msgs

@@ -89,22 +89,26 @@ Eval sets are in [`evals/`](evals/) and were labelled before the first model run
 | Privacy guard | 36 outbound calls (19 leaks, 17 normal) | rules alone caught 8/19; rules + Jev **18/19**, **0/17** normal calls blocked; median 78 ms |
 | Memory gatekeeper | 27 memory writes | kept **10/10** real facts, blocked **17/17** misfiled writes (16 with the right reason) |
 | Approval guard | 60 held-out flagged commands, vs Qwen as the approval model | unsafe approvals **0/22** (Qwen 0/22); harmless auto-approved 16/22 (Qwen 21/22); unclear approved **0/10** (Qwen 3/10); **88 ms** median vs 2.5 s (Qwen p90 12.7 s, one 93 s timeout) |
-| Search picker | 32 runs, 8 tasks (first version) | cut result text ~40% but no wall-time gain; dropped the wanted page on one task. Conservative rewrite not yet re-measured |
-| Context compressor | offline replay of one real session | ~12,600 → ~2,500 tokens in 0.85 s, no LLM summary call. Live comparison against the built-in compressor **not finished** |
+| Search picker | 2 × 16 paired runs | v1 dropped a wanted page; v2 (conservative) -3.7 s wall per run, CI -9.1 to +1.0, not significant |
+| Context compressor | offline replay of one real session | ~12,600 → ~2,500 tokens in 0.85 s, no LLM summary call. Live comparison inconclusive (see below) |
 | Tool-step routing | 24 runs, idle server, 8 tasks | 1 main-model call skipped per task; wall −1.6 s per run (CI −4.1 to +1.4), not significant |
 
 ### Search picker
-First version (kept the 3 top-scored results, re-ranked), 16 paired runs on 8 tasks: result text 157k → 96k chars,
-median 409 ms per search, but main-model input tokens and wall time were not lower (+5 s mean, not significant). On a
-task asking for an "official page" it dropped the right page and the agent made 12-14 calls instead of 5-7. The
-current version only removes results scored below `search_tau` (0.15) and keeps the engine's order; it has **not**
-been re-measured yet.
+Two versions, each 16 paired runs (off/on, shuffled, idle server, cache warmed). Version 1 kept the 3 top-scored
+results: result text -39% (157k to 96k chars) but wall time +5 s (not significant), and on a task asking for an
+"official page" it dropped the right page and the agent made 12-14 calls instead of 5-7. Version 2 (current) only
+removes results scored below `search_tau` and keeps the engine's order, on 8 new tasks: it removed 12 of 86 results
+(-7% result text), wall -3.7 s per run (95% CI -9.1 to +1.0), main-model time -4.4 s (CI -9.4 to -0.1), no
+answer-affecting drops seen (one task, latest Linux kernel, gave 7.2.3 vs 7.2.9 from different sources, a live-web
+difference). Small effect; not significant on wall time.
 
 ### Context compressor
-Replaying a recorded 15-message session (about 12,600 tokens) through the engine removed four old tool outputs and
-trimmed one, leaving about 2,500 tokens in 0.85 s with a single decision call and no generation call. Message roles
-and ids are unchanged. A live comparison against Hermes' built-in LLM-summary compressor (answer quality, total time)
-is still to be done; short tasks rarely reach the compaction trigger.
+Offline replay of a recorded 15-message session (about 12,600 tokens): four old tool outputs removed and one trimmed,
+leaving about 2,500 tokens in 0.85 s with a single decision call and no generation call; message roles and ids
+unchanged. A live comparison against Hermes' built-in compressor (6 runs each, three long research tasks, trigger
+lowered to 27,000 tokens) was **inconclusive**: neither compressor compacted much (about 22,000 of each prompt is the
+fixed system prompt and tool list, and most tool outputs were short browser results), so the wall-time gap
+(Jev 127 s vs built-in 194 s) is task variance, not a compaction effect. A fair test needs sessions of 100k+ tokens.
 
 ## Caveats
 - Small, author-labelled test sets; one main model; one decision model. Treat numbers as indicative.
@@ -113,8 +117,7 @@ is still to be done; short tasks rarely reach the compaction trigger.
   yes" override yet; use `monitor` if that matters.
 - Hermes' own dangerous-command detector does not flag some exfiltration commands (`scp ~/.aws/credentials …`),
   so the approval guard never sees them; the privacy guard does cover those.
-- The decision server tested here returned HTTP 500 for any state containing the lowercase word "content"; the client
-  retries once with that word capitalised.
+- Decision-API 5xx responses are retried once; a server bug that returned 500 for the word "content" was fixed server-side.
 - Only `chat_completions` API mode is handled by tool-step routing.
 
 ## Repository layout
