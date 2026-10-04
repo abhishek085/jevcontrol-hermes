@@ -36,11 +36,6 @@ hermes jev-control doctor
   including a negative one.
 - Do not log prompts, tool arguments or conversation text unless `log_content` is on.
 
-## Continuous integration
-
-A ready-made GitHub Actions workflow is in [`ci/github-actions-tests.yml`](ci/github-actions-tests.yml). Copy it to
-`.github/workflows/tests.yml` to enable it (pushing workflow files needs a token with the `workflow` scope).
-
 ## Principles
 
 1. The decision model answers small, bounded, pick-one questions. It never writes the answer for the user.
