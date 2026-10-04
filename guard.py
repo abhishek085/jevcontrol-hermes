@@ -126,6 +126,18 @@ def make_handler(cfg, log):
     return Handler
 
 
+def start_background(host: str, port: int, cfg, log) -> bool:
+    """Serve the guard from a daemon thread inside the Hermes process. False when the port is already taken (another
+    Hermes process or `hermes jev-control serve` is already serving it), which is fine: they share one guard."""
+    import threading
+    try:
+        server = ThreadingHTTPServer((host, port), make_handler(cfg, log))
+    except OSError:
+        return False
+    threading.Thread(target=server.serve_forever, name="jev-guard", daemon=True).start()
+    return True
+
+
 def serve(host: str, port: int, cfg, log) -> None:
     server = ThreadingHTTPServer((host, port), make_handler(cfg, log))
     print(f"jev-guard listening on http://{host}:{port}/v1  (model id: {MODEL_ID})")

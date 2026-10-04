@@ -1,6 +1,6 @@
 """Offline evaluation of the privacy guard and the memory gatekeeper against a live decision API.
 
-usage: python evals/run_offline.py --spark-url http://HOST:8400/v1 [--spark-model NAME] [--out results.json]
+usage: python tests/run_offline.py --spark-url http://HOST:8400/v1 [--spark-model NAME] [--out results.json]
 Reports the rule layer alone and rules + decision model, with per-case latency.
 """
 
@@ -13,7 +13,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
-sys.path.insert(0, str(ROOT / "evals"))
+sys.path.insert(0, str(ROOT / "tests"))
 pkg = ROOT.name
 privacy = importlib.import_module(f"{pkg}.privacy")
 memory_gate = importlib.import_module(f"{pkg}.memory_gate")

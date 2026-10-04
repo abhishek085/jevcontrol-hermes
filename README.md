@@ -82,7 +82,7 @@ auxiliary:
 ## Results so far
 
 Setup: Hermes main model Qwen3.8-27B and spark-s1-4b (NVFP4), both on a remote server; Mac M4 Pro client.
-Eval sets are in [`evals/`](evals/) and were labelled before the first model run.
+Eval sets are in [`tests/`](tests/) and were labelled before the first model run.
 
 | Feature | Test | Result |
 |---|---|---|
@@ -122,6 +122,6 @@ fixed system prompt and tool list, and most tool outputs were short browser resu
 
 ## Repository layout
 `__init__.py` (registration, config, tool routing, trace review) · `jev_client.py` · `privacy.py` · `memory_gate.py` ·
-`search_pick.py` · `compressor.py` · `guard.py` · `evals/` (cases + runners)
+`search_pick.py` · `compressor.py` · `guard.py` · `tests/` (labelled cases + runners)
 
 MIT license.

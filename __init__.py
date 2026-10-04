@@ -24,7 +24,7 @@ _DEFAULTS = {"spark_url": "http://localhost:8102/v1",
              "routing_mode": "off", "route_tools": None,
              "cascade_tau": 0.9, "skip_families": None, "keep_warm_s": 0, "log_timing": False,
              "guard_host": "127.0.0.1", "guard_port": 8765, "guard_approve_tau": 0.9, "guard_deny_tau": 0.7,
-             "guard_timeout_s": 10, "jev_timeout_s": 10,
+             "guard_timeout_s": 10, "jev_timeout_s": 10, "guard_autostart": False,
              "privacy_guard": "off", "privacy_tau": 0.8, "memory_gate": "off", "memory_tau": 0.7,
              "search_pick": "off", "search_tau": 0.15, "search_min_keep": 2, "search_max_keep": 10,
              "compressor": False, "compress_threshold": 0.5, "compress_keep_last": 6, "compress_need_tau": 0.5,
@@ -266,6 +266,7 @@ def _log(rec: dict) -> None:
     plugins.entries.jev-control.settings.log_content is true."""
     if not _cfg("log_content"):
         rec = {k: v for k, v in rec.items() if k not in _CONTENT_KEYS}
+    rec = {"ts": round(time.time(), 1), **rec}
     try:
         from hermes_constants import get_hermes_home
         path = get_hermes_home() / "logs" / "jev_routing.jsonl"
@@ -612,7 +613,10 @@ def _on_post_auxiliary_call(aux_task: str = "", api_duration: float = 0.0, sessi
 
 
 def _cli(args) -> None:
-    if getattr(args, "jev_command", None) == "serve":
+    if getattr(args, "jev_command", None) == "report":
+        from .report import report
+        report(args.since_minutes)
+    elif getattr(args, "jev_command", None) == "serve":
         from . import guard
         guard.serve(args.host or _cfg("guard_host"), int(args.port or _cfg("guard_port")), _cfg, _log)
     else:
@@ -622,6 +626,8 @@ def _cli(args) -> None:
 def _cli_args(subparser) -> None:
     subs = subparser.add_subparsers(dest="jev_command")
     p = subs.add_parser("serve", help="Serve the decision-model smart-approval guard (OpenAI-compatible, local)")
+    r = subs.add_parser("report", help="Summarize what each jev-control feature did (from the local log)")
+    r.add_argument("--since-minutes", type=float, default=0, help="only events from the last N minutes (needs log_timing)")
     p.add_argument("--host", default=None)
     p.add_argument("--port", type=int, default=None)
     subparser.set_defaults(func=_cli)
@@ -634,6 +640,9 @@ def register(ctx) -> None:
         threading.Thread(target=_keep_warm, name="jev-keep-warm", daemon=True).start()
     ctx.register_middleware("llm_execution", _llm_exec)
     ctx.register_tool(name="jev_control_review", toolset="jev_control", schema=SCHEMA, handler=_handle_review, emoji="🔍")
+    if _cfg("guard_autostart") is True or str(_cfg("guard_autostart")).lower() in ("on", "true", "1"):
+        from . import guard
+        guard.start_background(_cfg("guard_host"), int(_cfg("guard_port")), _cfg, _log)
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
     ctx.register_hook("transform_tool_result", _on_transform_tool_result)
