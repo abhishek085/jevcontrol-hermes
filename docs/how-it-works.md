@@ -6,7 +6,7 @@ probability for each.
 
 ## The decision model
 
-[spark-s1](https://huggingface.co/abhishek85/spark-s1-4b-v6) is a 4B model trained to answer multiple-choice questions about a
+[spark-s1 v8](https://huggingface.co/abhishek085/spark-s1-4b-v8-nvfp4) is a 4B model trained to answer multiple-choice questions about a
 *state* (untrusted text) and to be calibrated about it. The plugin reaches it two ways (`spark_api`):
 
 - `decide`: `POST /v1/decide` with `{"state", "questions": [...]}`. Questions may be `choice` (with options) or `boolean`;

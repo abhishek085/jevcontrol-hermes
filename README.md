@@ -131,7 +131,7 @@ Just trying it on your own machine, without a fork? A user plugin works too, and
 install scanner:
 
 ```bash
-hermes plugins install abhishek85/jevcontrol-hermes --enable
+hermes plugins install abhishek085/jevcontrol-hermes --enable
 ```
 
 Either way, expect to tune: thresholds (`privacy_tau`, `memory_tau`, `search_tau`), which features you enable, and the
