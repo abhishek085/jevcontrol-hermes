@@ -1,7 +1,7 @@
 # Results, method and caveats
 
 Everything here was measured on one setup: Hermes on an Apple M4 Pro (24 GB), main model **Qwen3.8-27B** on a remote
-server, decision model **spark-s1-4b (NVFP4)** behind a Jev-style `/v1/decide` API on the same remote host, tracing with a
+server, decision model **spark-s1 v8 (4B, NVFP4)** behind a Jev-style `/v1/decide` API on the same remote host, tracing with a
 local Langfuse. Earlier rounds used Gemma 4 (12B, E4B) locally. Dates: 2026-09-29 to 2026-10-04.
 
 Labels for every test set were written **before** any model saw them. The decision model's confidence is not calibrated

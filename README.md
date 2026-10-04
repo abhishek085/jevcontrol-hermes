@@ -2,23 +2,73 @@
 
 # jevcontrol-hermes
 
-**A fast reflex layer for [Hermes Agent](https://github.com/NousResearch/hermes-agent).**
-A small decision model handles the many tiny, pick-one decisions an agent makes, so your big model only does the thinking.
+**A small, fast safety-and-tidiness assistant for [Hermes Agent](https://github.com/NousResearch/hermes-agent).**
+It stops secrets leaking, keeps memory clean and approves safe commands in a tenth of a second, so your big AI model only has to think.
 
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![hermes](https://img.shields.io/badge/Hermes%20Agent-plugin-7c3aed)
 ![status](https://img.shields.io/badge/status-beta-orange)
 
-[Quick start](#quick-start) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Results](#results) · [Troubleshooting](#troubleshooting) · [Credits](#credits)
+[In plain words](#in-plain-words) · [Results](#what-it-does-for-you-results-in-plain-language) · [Quick start](#quick-start) · [Features](#what-you-get) · [How it works](#how-it-works) · [Troubleshooting](#troubleshooting) · [Credits](#credits)
 
 </div>
 
 ---
 
+## In plain words
+
+**Hermes is an AI agent.** It can search the web, run commands on your computer, write files and remember things about you.
+Every time it does one of those things, a big AI model has to stop and decide what to do. That is slow, and now and then it
+is risky.
+
+**This plugin puts a small, very fast assistant next to Hermes.** It watches the small moments and answers in about a tenth
+of a second:
+
+| The moment | What the assistant does |
+|---|---|
+| The agent is about to search for something that contains your **password**, a key, or private details | Stops it, and tells the agent to try again without the secret |
+| The agent wants to save a note to **long-term memory** | Keeps real facts about you; turns away to-do notes, how-tos and orders to itself |
+| The agent wants to run a **risky-looking command** (like a delete) | Says "fine" quickly for harmless ones, or asks *you* when it isn't sure |
+| A web search brings back ten results, half of them **irrelevant** | Hides the clearly irrelevant ones so the agent reads less |
+| The conversation has become **too long** | Trims old tool output the agent no longer needs, without waiting for a long summary |
+
+You do not need to be an expert. Install it, run one setup command, run one check command, and use Hermes as normal.
+It starts in a "just watch and tell me" mode, so nothing changes until you decide to let it block.
+
+## What it does for you (results in plain language)
+
+These are from my own tests. The figures are small-sample, so read them as "this works" rather than "this is exact".
+
+| What I tested | What happened | What it means for you |
+|---|---|---|
+| 19 attempts to send out passwords, keys or private details | **Stopped 18 of 19**, and wrongly stopped **0 of 17** normal searches | Far less chance your agent leaks something by accident |
+| 22 truly dangerous commands | **Let through 0 of 22**, same as a 27B model | Safe without relying on a big model |
+| Waiting for a yes/no on a risky-looking command | **0.09 seconds**, versus 2.5 seconds on a big model (one big-model check hung for 93 seconds) | No more stalls while the agent waits for approval |
+| 27 notes the agent wanted to remember | **Kept all 10 real facts, turned away all 17** junk notes | Memory stays useful instead of filling with clutter |
+| A long research session | Trimmed the conversation from **39k to 22k tokens in a quarter of a second** | Long jobs stay lighter, with no waiting for a summary |
+| Web searches | About **7 to 10% less text** to read (up to 40% on narrow searches) | A small, honest saving |
+
+**What it does not do:** it is not a magic speed-up. In my tests the whole job did **not** finish significantly faster
+(differences were a second or two, within the noise). The wins are **safety, tidiness and not waiting on approvals**. One
+idea that did not pan out (letting the small assistant skip the big model's routine first steps) is still in the plugin,
+marked experimental and off. The full, honest numbers are in [docs/results.md](docs/results.md).
+
+## Is this for me?
+
+- **Yes, if** you run Hermes and would like it to be harder to leak a secret by accident, to keep its memory clean, or to
+  approve safe commands without waiting on a big model.
+- **Maybe not, if** you only want raw speed: the gains here are mostly about safety and tidiness.
+- **What you need besides Hermes:** a small "decision model" server. The model I use is **spark-s1 v8 (NVFP4)**, published on
+  [Hugging Face](https://huggingface.co/abhishek085/spark-s1-4b-v8-nvfp4). NVFP4 is an NVIDIA format, so it needs an NVIDIA GPU
+  that supports it (for example a DGX Spark). On other hardware you can point the plugin at any small instruct model served
+  with an OpenAI-compatible API (see [step 1](#1-run-a-decision-model)).
+
+## Under the hood
+
 An agent loop is full of small questions: *Is this search about to leak a password? Is this memory note worth keeping?
 Which of these eight search results matter? Is this `rm -rf` safe?* Asking a 27B model each time is slow (seconds, sometimes
-minutes under load) and expensive. A purpose-built **decision model** ([spark-s1](https://huggingface.co/abhishek085/spark-s1-4b-v6),
-4B) answers a closed multiple-choice question in about **80 ms**, with a probability for each option, so the plugin can
+minutes under load) and expensive. A purpose-built **decision model** ([spark-s1](https://huggingface.co/abhishek085/spark-s1-4b-v8-nvfp4),
+4B, v8) answers a closed multiple-choice question in about **80 ms**, with a probability for each option, so the plugin can
 act when it is sure and fall back to the normal Hermes behaviour when it is not.
 
 `jevcontrol-hermes` wires that decision model into Hermes through documented extension points only. **No Hermes core
@@ -47,12 +97,13 @@ Pick one. Both give the plugin the same thing: a probability for each option of 
 
 | Option | Setting | You run |
 |---|---|---|
-| **A. Jev-style decision API** *(what the results below used)* | `spark_api: decide` | An [open-spark-Jev](https://github.com/abhishek085/JevControl/blob/HEAD/docs/MODELS.md) gateway that serves `POST /v1/decide` in front of a spark-s1 checkpoint. |
+| **A. Jev-style decision API** *(what the results here used)* | `spark_api: decide` | An open-spark-Jev gateway that serves `POST /v1/decide` in front of **spark-s1 v8 (NVFP4)**, on an NVIDIA GPU that supports NVFP4. |
 | **B. Any OpenAI-compatible server with logprobs** | `spark_api: chat` | vLLM, llama.cpp, SGLang, LM Studio or `mlx_lm.server` serving spark-s1 (or any small instruct model). The plugin asks a lettered menu question, generates one token, and reads the probabilities from its logprobs. |
 
-Serving recipes (vLLM, Apple Silicon/MLX, llama.cpp) are in the
-[JevControl model docs](https://github.com/abhishek085/JevControl/blob/HEAD/docs/MODELS.md). The weights are on Hugging Face:
-[`abhishek085/spark-s1-4b-v6`](https://huggingface.co/abhishek085/spark-s1-4b-v6). Check each model's own license there.
+The model is [`abhishek085/spark-s1-4b-v8-nvfp4`](https://huggingface.co/abhishek085/spark-s1-4b-v8-nvfp4) on Hugging Face
+(Apache-2.0, built on Qwen3.5-4B, an early release by its own model card). Serving recipes for the gateway and for
+OpenAI-compatible servers are in the [JevControl model docs](https://github.com/abhishek085/JevControl/blob/HEAD/docs/MODELS.md),
+a separate project from this one.
 
 > A Jev-style API does not return logprobs, and it does not need to: it returns calibrated probabilities itself. Logprobs
 > are only needed for option B. Option B is covered by unit tests against mock servers; the live results here used option A.
@@ -184,7 +235,7 @@ trust with that text.
 
 ## Results
 
-Setup: Hermes main model Qwen3.8-27B and spark-s1-4b on a remote server, M4 Pro client. Labelled test sets live in
+Setup: Hermes main model Qwen3.8-27B and spark-s1 v8 (4B, NVFP4) on a remote server, M4 Pro client. Labelled test sets live in
 [`tests/`](tests/) and were written before the first model run. Method, negative results and caveats:
 [docs/results.md](docs/results.md).
 
@@ -197,7 +248,7 @@ Setup: Hermes main model Qwen3.8-27B and spark-s1-4b on a remote server, M4 Pro 
 | Context compressor | offline replay + 12 live runs | replay: 12.6k → 2.5k tokens in 0.85 s. The live comparison with Hermes' built-in compressor was **inconclusive**: neither compacted much on tasks this size. In later live sessions it compacted twice at ~260 ms each |
 | Live check | 3 real sessions, `enforce` mode | blocks, allows, picker, approval and 2 compactions all as expected; no errors |
 
-**Read the caveats.** Test sets are small and author-labelled, with one main model and one decision model. The approval
+**Read the caveats.** Test sets are small and author-labelled, with one main model and one decision model (spark-s1 v8 is an early release). The approval
 guard is more cautious than Qwen (it asks you about 5 of 22 harmless commands instead of 1), by design. Tool-step routing
 showed no significant speed-up and stays experimental. The decision model's confidence is not calibrated: it can be wrong at
 p ≈ 1.0, which is why every blocking feature has a `monitor` mode and a threshold.
@@ -275,13 +326,15 @@ This project stands on other people's work. Thank you.
   plugin API, middleware, context-engine interface and smart-approval design are what make this possible. Hermes' smart
   approvals are themselves inspired by OpenAI Codex's guardian-subagent approvals, and the approval guard here speaks that
   same interface.
-- **[JevControl](https://github.com/abhishek085/JevControl)** (Apache-2.0), **spark-s1** and the other Jev decision models,
-  by [abhishek085](https://github.com/abhishek085), part of **Nokast**, an open-source AI community. The menu-readout prompt
-  format and the decision-API shape come from there.
-- **Jev** and **System One** are TypeSafe AI's names; *open-spark-Jev* is an independent implementation inspired by them.
-  This project is not affiliated with TypeSafe AI, NVIDIA or Nous Research.
+- **spark-s1** (Apache-2.0), the decision model, by [abhishek085](https://github.com/abhishek085), part of **Open Spark Jev**, an
+  open-source project of the **Nokast** AI community. It is fine-tuned from **Qwen3.5-4B** (Qwen team, Alibaba Cloud).
+- **[JevControl](https://github.com/abhishek085/JevControl)** (Apache-2.0) inspired this plugin. JevControl is a *different*
+  project: a tool that tests whether a small model can take over parts of an agent's decisions. This repository is not a
+  fork or port of it. It is a Hermes plugin with its own goals (safety, memory, approvals, context).
+- **Jev** and **System One** are TypeSafe AI's names; *open-spark-Jev* and spark-s1 are independent work that follows the same
+  contract and readout idea. This project is not affiliated with TypeSafe AI, NVIDIA or Nous Research.
 - **[Langfuse](https://langfuse.com)** (MIT) for the tracing that backed every measurement here.
-- **Qwen** (Alibaba Cloud) as the main model in the live tests and **Gemma** (Google) in earlier local rounds;
+- **Qwen3.8-27B** as the main model in the live tests and **Gemma** (Google) in earlier local rounds;
   **vLLM**, **llama.cpp** and **mlx-lm** for serving.
 
 ## License
