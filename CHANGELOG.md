@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 - 2026-10-05
+
+Documentation release; no code changes.
+
+### Changed
+- README opens with a plain-language explanation and plain-language results ("What it does for you").
+- Decision model references updated to spark-s1 v8 (`abhishek085/spark-s1-4b-v8-nvfp4`), with a hardware note (NVFP4 needs a supporting NVIDIA GPU; any OpenAI-compatible small model also works).
+- Clarified that this is a Hermes plugin inspired by, and separate from, JevControl; credits updated.
+
+### Fixed
+- Install command and one Hugging Face link had a typo (`abhishek85` instead of `abhishek085`).
+
 ## 0.2.0 - 2026-10-04
 
 First public version of the Jev decision layer for Hermes.
