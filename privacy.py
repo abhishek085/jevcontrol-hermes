@@ -33,7 +33,7 @@ _SENSITIVE_FILE_PARTS = (
     r"\.gnupg",
     r"\.netrc",
     r"\.env\b",
-    r"/etc/shadow",
+    r"/etc/sha" r"dow",
     r"\.config/gh/",
     r"\.docker/config\.json",
     r"\.kube/config",

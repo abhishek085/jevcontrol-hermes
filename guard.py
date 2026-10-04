@@ -17,8 +17,6 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import httpx
-
 MODEL_ID = "jev-guard"
 _COMMAND = re.compile(r"<command>\n?(.*?)\n?</command>", re.S)
 _FLAGGED = re.compile(r"flagged as:\s*(.+?)\n", re.I)
@@ -55,27 +53,14 @@ def parse_request(body: dict) -> dict | None:
             "policy": policy.group(1).strip() if policy else ""}
 
 
-def decide(req: dict, cfg) -> dict:
+def decide(req: dict, cfg, jev=None) -> dict:
     """One decision-model call -> {"verdict", "pick", "p", "ms"}."""
+    from .jev_client import Jev
     instructions = _INSTRUCTIONS + (f" Operator policy (trusted): {req['policy']}" if req["policy"] else "")
-    body = {"state": f"Command:\n{req['command']}\n(detector note: {req['flagged']})",
-            "questions": [{"id": "q", "type": "choice", "instructions": instructions,
-                           "options": [{"id": k, "definition": v} for k, v in _OPTIONS.items()]}]}
-    if cfg("spark_model") and cfg("spark_model") != "spark-s1":
-        body["model"] = cfg("spark_model")
-    t = time.perf_counter()
-    for attempt in (0, 1):
-        r = httpx.post(f"{cfg('spark_url')}/decide", json=body, timeout=float(cfg("guard_timeout_s")))
-        if r.status_code < 500 or attempt:
-            break
-    r.raise_for_status()
-    d = r.json()["decisions"]["q"]
-    probs = {k: float(v) for k, v in (d.get("probabilities") or {}).items()}
-    pick = d.get("selected") or max(probs, key=probs.get)
-    p = probs.get(pick, float(d.get("confidence") or 0.0))
-    need = {"approve": float(cfg("guard_approve_tau")), "deny": float(cfg("guard_deny_tau"))}.get(pick)
-    verdict = pick if need is not None and p >= need else "escalate"
-    return {"verdict": verdict, "pick": pick, "p": p, "ms": (time.perf_counter() - t) * 1000}
+    r = (jev or Jev(cfg)).choice(f"Command:\n{req['command']}\n(detector note: {req['flagged']})", instructions, _OPTIONS)
+    need = {"approve": float(cfg("guard_approve_tau")), "deny": float(cfg("guard_deny_tau"))}.get(r["pick"])
+    verdict = r["pick"] if need is not None and r["p"] >= need else "escalate"
+    return {"verdict": verdict, "pick": r["pick"], "p": r["p"], "ms": r["ms"]}
 
 
 def _completion(text: str) -> dict:

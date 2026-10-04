@@ -24,9 +24,10 @@ from privacy_cases import CASES as PRIVACY  # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("--spark-url", required=True)
 ap.add_argument("--spark-model", default="spark-s1")
+ap.add_argument("--api", choices=("decide", "chat"), default="decide", help="decide = Jev-style /v1/decide; chat = OpenAI-compatible with logprobs")
 ap.add_argument("--out", default="")
 a = ap.parse_args()
-cfg = {"spark_url": a.spark_url, "spark_model": a.spark_model, "jev_timeout_s": 15, "privacy_tau": 0.8, "memory_tau": 0.7}.get
+cfg = {"spark_url": a.spark_url, "spark_model": a.spark_model, "spark_api": a.api, "jev_timeout_s": 15, "privacy_tau": 0.8, "memory_tau": 0.7}.get
 jev = Jev(cfg)
 rows = []
 

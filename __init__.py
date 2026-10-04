@@ -24,7 +24,7 @@ _DEFAULTS = {"spark_url": "http://localhost:8102/v1",
              "routing_mode": "off", "route_tools": None,
              "cascade_tau": 0.9, "skip_families": None, "keep_warm_s": 0, "log_timing": False,
              "guard_host": "127.0.0.1", "guard_port": 8765, "guard_approve_tau": 0.9, "guard_deny_tau": 0.7,
-             "guard_timeout_s": 10, "jev_timeout_s": 10, "guard_autostart": False,
+             "jev_timeout_s": 10, "guard_autostart": False,
              "privacy_guard": "off", "privacy_tau": 0.8, "memory_gate": "off", "memory_tau": 0.7,
              "search_pick": "off", "search_tau": 0.15, "search_min_keep": 2, "search_max_keep": 10,
              "compressor": False, "compress_threshold": 0.5, "compress_keep_last": 6, "compress_need_tau": 0.5,
@@ -613,23 +613,15 @@ def _on_post_auxiliary_call(aux_task: str = "", api_duration: float = 0.0, sessi
 
 
 def _cli(args) -> None:
-    if getattr(args, "jev_command", None) == "report":
-        from .report import report
-        report(args.since_minutes)
-    elif getattr(args, "jev_command", None) == "serve":
-        from . import guard
-        guard.serve(args.host or _cfg("guard_host"), int(args.port or _cfg("guard_port")), _cfg, _log)
-    else:
-        print("Usage: hermes jev-control serve [--host H] [--port P]")
+    from . import cli
+    sys_exit = cli.run(args, _cfg, _log)
+    if sys_exit:
+        raise SystemExit(sys_exit)
 
 
 def _cli_args(subparser) -> None:
-    subs = subparser.add_subparsers(dest="jev_command")
-    p = subs.add_parser("serve", help="Serve the decision-model smart-approval guard (OpenAI-compatible, local)")
-    r = subs.add_parser("report", help="Summarize what each jev-control feature did (from the local log)")
-    r.add_argument("--since-minutes", type=float, default=0, help="only events from the last N minutes (needs log_timing)")
-    p.add_argument("--host", default=None)
-    p.add_argument("--port", type=int, default=None)
+    from . import cli
+    cli.add_arguments(subparser)
     subparser.set_defaults(func=_cli)
 
 
