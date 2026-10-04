@@ -70,4 +70,4 @@ def report(since_minutes: float = 0.0) -> None:
     print("== Errors (all fail open):", errs or "none")
     L = ev["llm"]
     if L:
-        print(f"== Main model: {len(L)} calls, median {_ms([r.get('llm_ms') for r in L])}")
+        print(f"== Main model: {len(L)} calls, {_ms([r.get('llm_ms') for r in L])}")
