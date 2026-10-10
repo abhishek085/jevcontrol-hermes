@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- 15-second animated demo (`docs/demo/`): an HTML canvas animation, rendered to MP4 and GIF by `docs/demo/render.mjs`, shown at the top of the README with a new "Demo" section.
+
 ## 0.2.1 - 2026-10-05
 
 Documentation release; no code changes.

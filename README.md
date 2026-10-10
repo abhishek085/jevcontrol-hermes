@@ -9,7 +9,13 @@ It stops secrets leaking, keeps memory clean and approves safe commands in a ten
 ![hermes](https://img.shields.io/badge/Hermes%20Agent-plugin-7c3aed)
 ![status](https://img.shields.io/badge/status-beta-orange)
 
-[In plain words](#in-plain-words) · [Results](#what-it-does-for-you-results-in-plain-language) · [Quick start](#quick-start) · [Features](#what-you-get) · [How it works](#how-it-works) · [Troubleshooting](#troubleshooting) · [Credits](#credits)
+[Demo](#demo) · [In plain words](#in-plain-words) · [Results](#what-it-does-for-you-results-in-plain-language) · [Quick start](#quick-start) · [Features](#what-you-get) · [How it works](#how-it-works) · [Troubleshooting](#troubleshooting) · [Credits](#credits)
+
+<br>
+
+<a href="docs/demo/demo.mp4"><img src="docs/demo/demo.gif" alt="15-second animated demo: Hermes keeps working while the spark-s1 decision model blocks a password leak, files memory, approves or escalates commands, drops off-topic search results and trims the context from 39.2k to 22.1k tokens" width="860"></a>
+
+<sub>15-second animated demo (an illustration, not a screen recording). <a href="docs/demo/demo.mp4">MP4</a> · <a href="#demo">what it shows</a></sub>
 
 </div>
 
@@ -34,6 +40,26 @@ of a second:
 
 You do not need to be an expert. Install it, run one setup command, run one check command, and use Hermes as normal.
 It starts in a "just watch and tell me" mode, so nothing changes until you decide to let it block.
+
+## Demo
+
+The animation above is one short Hermes session. The main LLM (left panel, purple status line) keeps researching the whole
+time; every routine decision goes to the small decision model instead, and each one comes back in under a tenth of a second.
+
+| Time | What happens | Verdict |
+|---|---|---|
+| 0:01 | The agent tries to search with a password in the query | 🔴 **BLOCK** (84 ms). The agent rewrites the search and it is 🟢 allowed |
+| 0:03 | The agent saves a real preference, then a to-do note, to long-term memory | 🟢 **KEEP** the fact, 🔴 **REJECT** the note ("save it as a skill") |
+| 0:04 | A scoped `rm -rf ./build/cache`, then `curl … \| sudo bash` | 🟢 **APPROVE** (88 ms), 🟡 **ASK USER** |
+| 0:06 | A web search returns 8 results, half off-topic | 🟢 **KEEP 4/8**: the off-topic ones never reach the context |
+| 0:09 | The context passes the threshold | ✂️ stale tool output trimmed, **39.2k → 22.1k tokens in 262 ms**, no LLM summary |
+
+The bottom bar is the context window: the text the main LLM re-reads on every step. Watch the search results and old tool
+output shrink while the useful results stay. The session itself is illustrative; the headline figures (about 80 to 90 ms per verdict,
+39k → 22k tokens in about 260 ms) come from the measurements in [Results](#results).
+
+The demo is plain HTML canvas: open [`docs/demo/demo.html`](docs/demo/demo.html) in a browser to watch it live, or
+re-render the video and GIF with `node docs/demo/render.mjs` (needs Playwright with Chromium, and ffmpeg).
 
 ## What it does for you (results in plain language)
 
@@ -316,7 +342,8 @@ PYTHONPATH=/path/to/hermes-agent python -m pytest -q           # 43 tests, inclu
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and the [changelog](CHANGELOG.md). Layout: `__init__.py` (registration, hooks, config,
 experimental routing, trace review) · `jev_client.py` (decision-model client) · `privacy.py` · `memory_gate.py` ·
-`search_pick.py` · `compressor.py` · `guard.py` · `cli.py` · `report.py` · `tests/` (unit tests and labelled evaluation sets).
+`search_pick.py` · `compressor.py` · `guard.py` · `cli.py` · `report.py` · `tests/` (unit tests and labelled evaluation sets) ·
+`docs/demo/` (the animated demo and its renderer).
 
 ## Credits
 

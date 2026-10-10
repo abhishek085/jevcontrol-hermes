@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jevcontrol-hermes demo</title>
+<!--
+  15-second animated demo of jevcontrol-hermes. Pure canvas, no recordings.
+  Open in a browser to play it in a loop. docs/demo/render.mjs renders it to
+  demo.mp4 / demo.gif by calling window.drawFrame(t) for each frame.
+-->
+<style>
+  html, body { margin: 0; background: #05070a; height: 100%; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { width: min(100vw, 177.78vh); height: auto; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1280" height="720"></canvas>
+<script>
+const W = 1280, H = 720, DURATION = 15;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+const C = {
+  bg: '#05070a', win: '#0a0e14', pane: '#0d121a', border: '#1a2430', head: '#0f151e',
+  text: '#d3dce6', dim: '#5f6e7f', faint: '#2a3644',
+  cyan: '#22d3ee', green: '#34d399', red: '#f87171', amber: '#fbbf24', violet: '#a78bfa', blue: '#60a5fa',
+};
+const MONO = '"DejaVu Sans Mono", "JetBrains Mono", Menlo, Consolas, monospace';
+
+// ---------- helpers ----------
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const eo = x => 1 - Math.pow(1 - x, 3);
+const eio = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const back = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const lerp = (a, b, p) => a + (b - a) * p;
+function font(px, weight = 'normal') { ctx.font = `${weight} ${px}px ${MONO}`; }
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function alpha(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+function glow(color, blur) { ctx.shadowColor = color; ctx.shadowBlur = blur; }
+function noGlow() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; }
+
+// ---------- layout ----------
+const WIN = { x: 36, y: 34, w: 1208, h: 652 };
+const LEFT = { x: 56, y: 82, w: 650, h: 452 };
+const RIGHT = { x: 726, y: 82, w: 498, h: 452 };
+const LOG = { x: LEFT.x + 14, y: LEFT.y + 44, w: LEFT.w - 28, h: 352 };
+const LH = 21;
+
+const LANES = [
+  { id: 'privacy',  icon: '◈', name: 'Privacy guard',      sub: 'outgoing searches, URLs, commands' },
+  { id: 'memory',   icon: '◉', name: 'Memory gatekeeper',  sub: 'facts in · task notes out' },
+  { id: 'approval', icon: '⚑', name: 'Approval guard',     sub: 'flagged shell commands' },
+  { id: 'search',   icon: '⌕', name: 'Search picker',      sub: 'drop irrelevant results' },
+  { id: 'context',  icon: '▤', name: 'Context compressor', sub: 'trim stale tool output, no LLM' },
+];
+const LANE_Y0 = RIGHT.y + 44, LANE_H = 66, LANE_GAP = 5;
+const laneBox = i => ({ x: RIGHT.x + 12, y: LANE_Y0 + i * (LANE_H + LANE_GAP), w: RIGHT.w - 24, h: LANE_H });
+const laneIndex = id => LANES.findIndex(l => l.id === id);
+
+const VERDICT = {
+  BLOCK: C.red, ALLOW: C.green, KEEP: C.green, REJECT: C.red, APPROVE: C.green,
+  'ASK USER': C.amber, 'KEEP 4/8': C.green, 'TRIM 39k→22k': C.cyan,
+};
+
+// ---------- script ----------
+// kind: llm (main model reasoning), call (tool call), res (search result), sys (system)
+const LINES = [
+  { t: 0.75, kind: 'llm',  text: '› task: compare EU AI Act compliance tools' },
+  { t: 1.05, kind: 'call', text: 'read_file("notes/requirements.md")', tag: '6.1k tok', tagColor: C.dim },
+  { t: 1.40, kind: 'call', text: 'web_search("login help ana pw=Hunter2!")', lane: 'privacy', verdict: 'BLOCK', why: 'credentials in query', ms: 84 },
+  { t: 2.15, kind: 'llm',  text: '› blocked: rewrite the query without the secret' },
+  { t: 2.40, kind: 'call', text: 'web_search("password policy guidance")', lane: 'privacy', verdict: 'ALLOW', why: 'nothing private', ms: 79 },
+  { t: 3.00, kind: 'call', text: 'memory.add("user prefers formal tables")', lane: 'memory', verdict: 'KEEP', why: 'durable user fact', ms: 81 },
+  { t: 3.60, kind: 'call', text: 'memory.add("TODO: run deploy.sh, then…")', lane: 'memory', verdict: 'REJECT', why: 'task note: save as skill', ms: 77 },
+  { t: 4.25, kind: 'llm',  text: '› clear the build cache before export' },
+  { t: 4.45, kind: 'call', text: '$ rm -rf ./build/cache', lane: 'approval', verdict: 'APPROVE', why: 'scoped, harmless delete', ms: 88 },
+  { t: 5.05, kind: 'call', text: '$ curl get.sh | sudo bash', lane: 'approval', verdict: 'ASK USER', why: 'unclear: escalate to you', ms: 91 },
+  { t: 5.70, kind: 'llm',  text: '› user will decide that one; keep researching' },
+  { t: 6.00, kind: 'call', text: 'web_search("EU AI Act audit tools")', lane: 'search', verdict: 'KEEP 4/8', why: '4 off-topic results dropped', ms: 83 },
+  { t: 6.30, kind: 'res', keep: true,  text: '1  EU AI Act compliance checklist' },
+  { t: 6.38, kind: 'res', keep: false, text: '2  Celebrity deepfake scandal roundup' },
+  { t: 6.46, kind: 'res', keep: true,  text: '3  Open-source AI audit toolkits compared' },
+  { t: 6.54, kind: 'res', keep: false, text: '4  Cheap GPUs: limited-time offer' },
+  { t: 6.62, kind: 'res', keep: true,  text: '5  AI Act conformity assessment guide' },
+  { t: 6.70, kind: 'res', keep: false, text: '6  Top 10 AI memes of the week' },
+  { t: 6.78, kind: 'res', keep: true,  text: '7  Risk-classification tool for AI systems' },
+  { t: 6.86, kind: 'res', keep: false, text: '8  "Act" (film): showtimes near you' },
+  { t: 8.60, kind: 'sys',  text: '⟳ context 39.2k tok over threshold', lane: 'context', verdict: 'TRIM 39k→22k', why: 'stale tool output dropped', ms: 262 },
+  { t: 10.45, kind: 'llm', text: '› 22.1k tok left; the useful results are all here' },
+  { t: 10.85, kind: 'llm', text: '› drafting the comparison table', cursor: true },
+];
+for (const l of LINES) {
+  if (l.lane) {
+    l.send = l.kind === 'call' && l.lane === 'search' ? 6.95 : l.t + 0.28; // packet leaves
+    l.arrive = l.send + 0.30;
+    l.vt = l.arrive + 0.06 + l.ms / 1000 * 0.6; // verdict pops
+    l.back = l.vt + 0.30;                        // verdict packet lands on the log line
+    l.tagAt = l.back;
+  }
+}
+const COMPRESS_T0 = 9.15, COMPRESS_T1 = 10.30;
+const PICK_T = LINES.find(l => l.lane === 'search').back; // picker verdict reaches the results
+for (const l of LINES) {
+  if (l.kind === 'res' && !l.keep) { l.strike = PICK_T; l.collapse = PICK_T + 0.4; }
+  if (l.kind === 'res' && l.keep) l.flash = PICK_T;
+  if (l.lane === 'context') l.tagAt = COMPRESS_T1;  // tag once the trim is done
+}
+
+// context-window blocks (tokens). trim → stub size during compression
+const BLOCKS = [
+  { t: 0.0,  tok: 2200, kind: 'sys' },
+  { t: 0.75, tok: 500,  kind: 'user' },
+  { t: 1.15, tok: 6100, kind: 'tool', trim: 300 },
+  { t: 1.70, tok: 3400, kind: 'tool', trim: 200 },
+  { t: 2.20, tok: 700,  kind: 'asst' },
+  { t: 2.75, tok: 4300, kind: 'tool' },
+  { t: 3.85, tok: 1500, kind: 'tool' },
+  { t: 4.10, tok: 600,  kind: 'asst' },
+  { t: 4.95, tok: 2600, kind: 'tool', trim: 600 },
+  { t: 5.50, tok: 6300, kind: 'tool', trim: 200 },
+  { t: 5.80, tok: 700,  kind: 'asst' },
+  { t: 6.40, tok: 12000, kind: 'tool', picked: 9000 },
+  { t: 8.10, tok: 1300, kind: 'asst' },
+];
+const BLOCK_COLOR = { sys: C.violet, user: C.cyan, asst: C.blue, tool: '#64748b' };
+let trimOrder = 0;
+for (const b of BLOCKS) if (b.trim) b.trimAt = COMPRESS_T0 + 0.16 * trimOrder++;
+
+function blockTok(b, t) {
+  let tok = b.tok;
+  if (b.picked) tok = lerp(b.tok, b.picked, eio(seg(t, PICK_T + 0.4, PICK_T + 0.85)));
+  if (b.trim) tok = lerp(tok, b.trim, eio(seg(t, b.trimAt, b.trimAt + 0.45)));
+  return tok * eo(seg(t, b.t, b.t + 0.3));
+}
+
+// ---------- drawing ----------
+function drawBackground(t) {
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(34,211,238,0.035)'; ctx.lineWidth = 1;
+  const off = (t * 12) % 40;
+  for (let x = -40 + off; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  const g = ctx.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 760);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.65)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+function drawWindow(t) {
+  glow('rgba(34,211,238,0.12)', 40);
+  ctx.fillStyle = C.win; rr(WIN.x, WIN.y, WIN.w, WIN.h, 12); ctx.fill();
+  noGlow();
+  ctx.strokeStyle = C.border; ctx.lineWidth = 1; rr(WIN.x + .5, WIN.y + .5, WIN.w - 1, WIN.h - 1, 12); ctx.stroke();
+  ctx.fillStyle = C.head; rr(WIN.x + 1, WIN.y + 1, WIN.w - 2, 32, [11, 11, 0, 0]); ctx.fill();
+  ['#ff5f57', '#febc2e', '#28c840'].forEach((c, i) => {
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(WIN.x + 20 + i * 18, WIN.y + 17, 5.5, 0, 7); ctx.fill();
+  });
+  font(13); ctx.fillStyle = C.dim; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('hermes  —  plugin: jevcontrol-hermes  —  mode: enforce', WIN.x + WIN.w / 2, WIN.y + 17);
+  ctx.textAlign = 'left';
+}
+
+function paneFrame(p, title, right, accent) {
+  ctx.fillStyle = C.pane; rr(p.x, p.y, p.w, p.h, 8); ctx.fill();
+  ctx.strokeStyle = C.border; rr(p.x + .5, p.y + .5, p.w - 1, p.h - 1, 8); ctx.stroke();
+  ctx.strokeStyle = C.border; ctx.beginPath(); ctx.moveTo(p.x, p.y + 32); ctx.lineTo(p.x + p.w, p.y + 32); ctx.stroke();
+  font(12.5, 'bold'); ctx.textBaseline = 'middle'; ctx.fillStyle = accent;
+  ctx.fillText(title, p.x + 14, p.y + 16.5);
+  font(12); ctx.fillStyle = C.dim; ctx.textAlign = 'right';
+  ctx.fillText(right, p.x + p.w - 14, p.y + 16.5); ctx.textAlign = 'left';
+}
+
+function lineHeight(l, t) {
+  let h = eo(seg(t, l.t, l.t + 0.16));
+  if (l.collapse) h *= 1 - eio(seg(t, l.collapse, l.collapse + 0.45));
+  return h * LH;
+}
+
+// returns visible line positions {line, y, h}
+function layoutLog(t) {
+  const vis = LINES.filter(l => t >= l.t);
+  const hs = vis.map(l => lineHeight(l, t));
+  const total = hs.reduce((a, b) => a + b, 0);
+  const scroll = Math.max(0, total - LOG.h);
+  let y = LOG.y - scroll;
+  return vis.map((l, i) => { const r = { line: l, y, h: hs[i] }; y += hs[i]; return r; });
+}
+
+function chip(x, y, label, color, a = 1, size = 11.5, alignRight = false) {
+  font(size, 'bold');
+  const w = ctx.measureText(label).width + 14, h = size + 9;
+  const X = alignRight ? x - w : x;
+  ctx.globalAlpha *= a;
+  ctx.fillStyle = alpha(color, 0.16); rr(X, y - h / 2, w, h, 4); ctx.fill();
+  ctx.strokeStyle = alpha(color, 0.85); ctx.lineWidth = 1; rr(X + .5, y - h / 2 + .5, w - 1, h - 1, 4); ctx.stroke();
+  ctx.fillStyle = color; ctx.textBaseline = 'middle'; ctx.fillText(label, X + 7, y + 0.5);
+  ctx.globalAlpha /= a;
+  return w;
+}
+
+function drawLog(t) {
+  paneFrame(LEFT, 'HERMES AGENT', 'main LLM · 27B', C.text);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(LOG.x - 6, LOG.y - 4, LOG.w + 12, LOG.h + 8); ctx.clip();
+  const rows = layoutLog(t);
+  for (const { line: l, y, h } of rows) {
+    if (h < 0.5) continue;
+    const a = seg(t, l.t, l.t + 0.2) * clamp(h / LH * 1.4);
+    const cy = y + LH / 2;
+    ctx.globalAlpha = a; ctx.textBaseline = 'middle';
+    let x = LOG.x;
+    const typed = p => l.text.slice(0, Math.ceil(l.text.length * p));
+    if (l.kind === 'llm') {
+      font(13.5); ctx.fillStyle = '#9aa8b8';
+      let s = typed(eo(seg(t, l.t, l.t + 0.35)));
+      if (l.cursor && Math.floor(t * 3) % 2 === 0) s += ' ▍';
+      ctx.fillText(s, x, cy);
+    } else if (l.kind === 'call' || l.kind === 'sys') {
+      font(13.5);
+      ctx.fillStyle = l.kind === 'sys' ? C.amber : C.cyan;
+      ctx.fillText(l.kind === 'sys' ? '' : '▸', x, cy);
+      ctx.fillStyle = l.kind === 'sys' ? C.amber : C.text;
+      ctx.fillText(typed(eo(seg(t, l.t, l.t + 0.25))), x + 16, cy);
+      if (l.tag) chip(LOG.x + LOG.w, cy, l.tag, l.tagColor, seg(t, l.t + 0.3, l.t + 0.45), 10.5, true);
+      if (l.verdict) {
+        const p = seg(t, l.tagAt, l.tagAt + 0.18);
+        if (p > 0) {
+          const label = { BLOCK: 'BLOCKED', ALLOW: 'ALLOWED', KEEP: 'KEPT', REJECT: 'REJECTED', APPROVE: 'APPROVED', 'ASK USER': 'ASK USER', 'KEEP 4/8': '4 OF 8 KEPT', 'TRIM 39k→22k': '−17.1k TOK' }[l.verdict];
+          chip(LOG.x + LOG.w, cy, label, VERDICT[l.verdict], p, 10.5, true);
+        }
+        // waiting indicator while the decision model works
+        if (t >= l.send && t < l.tagAt) {
+          font(11); ctx.fillStyle = C.cyan; ctx.textAlign = 'right';
+          ctx.fillText('spark-s1 ' + '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'[Math.floor(t * 20) % 10], LOG.x + LOG.w, cy);
+          ctx.textAlign = 'left';
+        }
+      }
+    } else if (l.kind === 'res') {
+      font(12.5);
+      const fp = l.flash ? seg(t, l.flash, l.flash + 0.25) : 0;
+      ctx.fillStyle = l.keep ? (fp > 0 ? '#bfeedd' : '#8796a6') : (l.strike && t > l.strike ? alpha(C.red, 0.8) : '#8796a6');
+      ctx.fillText(l.text, x + 30, cy);
+      if (l.keep && fp > 0) { ctx.fillStyle = alpha(C.green, fp); ctx.fillText('✓', x + 14, cy); }
+      if (!l.keep && l.strike) {
+        const sp = eo(seg(t, l.strike, l.strike + 0.3));
+        if (sp > 0) {
+          font(12.5); const w = ctx.measureText(l.text).width;
+          ctx.strokeStyle = C.red; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(x + 28, cy); ctx.lineTo(x + 28 + (w + 4) * sp, cy); ctx.stroke();
+          ctx.fillStyle = alpha(C.red, sp); ctx.fillText('✕', x + 14, cy);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+  drawLLMStatus(t);
+}
+
+function drawLLMStatus(t) {
+  const y = LEFT.y + LEFT.h - 28;
+  ctx.strokeStyle = C.border; ctx.beginPath(); ctx.moveTo(LEFT.x, y - 18); ctx.lineTo(LEFT.x + LEFT.w, y - 18); ctx.stroke();
+  const pulse = 0.55 + 0.45 * Math.sin(t * 6);
+  glow(C.violet, 10 * pulse); ctx.fillStyle = C.violet;
+  ctx.beginPath(); ctx.arc(LEFT.x + 20, y, 5, 0, 7); ctx.fill(); noGlow();
+  font(13, 'bold'); ctx.fillStyle = C.violet; ctx.textBaseline = 'middle';
+  ctx.fillText('main LLM', LEFT.x + 34, y);
+  font(13); ctx.fillStyle = '#9aa8b8';
+  const verb = t < 10.85 ? 'researching' : 'writing answer';
+  ctx.fillText(verb + ' ' + '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'[Math.floor(t * 14) % 10], LEFT.x + 112, y);
+  // token stream: steady, never pauses
+  const tok = Math.floor(140 + t * 92);
+  ctx.textAlign = 'right'; ctx.fillStyle = C.dim;
+  ctx.fillText(tok.toLocaleString('en-US') + ' tok out', LEFT.x + LEFT.w - 128, y);
+  // throughput sparkline
+  const sx = LEFT.x + LEFT.w - 116, sw = 100;
+  ctx.strokeStyle = alpha(C.violet, 0.9); ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let i = 0; i <= 40; i++) {
+    const tt = t - (40 - i) * 0.05;
+    const v = 0.55 + 0.25 * Math.sin(tt * 9.1) * Math.sin(tt * 3.3) + 0.12 * Math.sin(tt * 23);
+    const px = sx + i / 40 * sw, py = y + 7 - v * 14;
+    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  }
+  ctx.stroke(); ctx.textAlign = 'left';
+}
+
+function laneActivity(id, t) {
+  // last verdict and activity level for a lane
+  let last = null, active = 0;
+  for (const l of LINES) {
+    if (l.lane !== id) continue;
+    if (t >= l.vt) last = l;
+    if (t >= l.send && t < l.vt + 0.9) active = Math.max(active, t < l.vt ? seg(t, l.send, l.arrive) : 1 - seg(t, l.vt + 0.3, l.vt + 0.9));
+  }
+  if (id === 'context' && t >= COMPRESS_T0 && t < COMPRESS_T1 + 0.5) active = Math.max(active, 1 - seg(t, COMPRESS_T1, COMPRESS_T1 + 0.5));
+  return { last, active };
+}
+
+function drawLanes(t) {
+  const done = LINES.filter(l => l.lane && t >= l.vt);
+  const ms = done.map(l => l.ms).sort((a, b) => a - b);
+  const med = ms.length ? ms[Math.floor((ms.length - 1) / 2)] : 0;
+  paneFrame(RIGHT, 'SPARK-S1  ·  DECISION MODEL', '4B', C.cyan);
+  LANES.forEach((lane, i) => {
+    const b = laneBox(i);
+    const { last, active } = laneActivity(lane.id, t);
+    if (active > 0) { glow(alpha(C.cyan, 0.5), 18 * active); }
+    ctx.fillStyle = active > 0 ? alpha(C.cyan, 0.06 * active + 0.02) : 'rgba(255,255,255,0.015)';
+    rr(b.x, b.y, b.w, b.h, 7); ctx.fill(); noGlow();
+    ctx.strokeStyle = active > 0 ? alpha(C.cyan, 0.25 + 0.6 * active) : C.border;
+    ctx.lineWidth = 1; rr(b.x + .5, b.y + .5, b.w - 1, b.h - 1, 7); ctx.stroke();
+    font(18); ctx.textBaseline = 'middle'; ctx.fillStyle = active > 0 ? C.cyan : '#4b5a6b';
+    ctx.fillText(lane.icon, b.x + 14, b.y + 23);
+    font(14, 'bold'); ctx.fillStyle = C.text; ctx.fillText(lane.name, b.x + 42, b.y + 23);
+    const swap = last ? seg(t, last.vt, last.vt + 0.25) : 0;
+    font(11.5); ctx.fillStyle = C.dim; ctx.globalAlpha = 1 - swap;
+    ctx.fillText(lane.sub, b.x + 42, b.y + 45); ctx.globalAlpha = 1;
+    if (last) {
+      const p = seg(t, last.vt, last.vt + 0.22);
+      const s = lerp(0.6, 1, back(p));
+      ctx.save();
+      const cx = b.x + b.w - 14, cy = b.y + 23;
+      ctx.translate(cx, cy); ctx.scale(s, s); ctx.translate(-cx, -cy);
+      const flash = 1 - seg(t, last.vt, last.vt + 0.6);
+      if (flash > 0) glow(VERDICT[last.verdict], 22 * flash);
+      chip(cx, cy, last.verdict, VERDICT[last.verdict], p, 12.5, true);
+      noGlow(); ctx.restore();
+      font(11.5); ctx.globalAlpha = swap;
+      ctx.fillStyle = alpha(VERDICT[last.verdict], 0.85); ctx.fillText('→ ' + last.why, b.x + 42, b.y + 45);
+      ctx.textAlign = 'right'; ctx.globalAlpha = p;
+      ctx.fillStyle = C.cyan; font(11.5, 'bold'); ctx.fillText(last.ms + ' ms', b.x + b.w - 14, b.y + 45);
+      ctx.globalAlpha = 1; ctx.textAlign = 'left';
+    }
+  });
+  // stats footer
+  const y = RIGHT.y + RIGHT.h - 28;
+  ctx.strokeStyle = C.border; ctx.beginPath(); ctx.moveTo(RIGHT.x, y - 18); ctx.lineTo(RIGHT.x + RIGHT.w, y - 18); ctx.stroke();
+  font(12.5); ctx.textBaseline = 'middle';
+  let x = RIGHT.x + 14;
+  const part = (k, v, c) => { ctx.fillStyle = C.dim; ctx.fillText(k, x, y); x += ctx.measureText(k).width + 6; ctx.fillStyle = c; font(12.5, 'bold'); ctx.fillText(v, x, y); x += ctx.measureText(v).width + 18; font(12.5); };
+  part('decisions', String(done.length), C.text);
+  part('median', med ? med + ' ms' : '—', C.cyan);
+  part('main LLM waits', '0', C.green);
+}
+
+function bezier(p0, p1, p2, p3, u) {
+  const v = 1 - u;
+  return {
+    x: v * v * v * p0.x + 3 * v * v * u * p1.x + 3 * v * u * u * p2.x + u * u * u * p3.x,
+    y: v * v * v * p0.y + 3 * v * v * u * p1.y + 3 * v * u * u * p2.y + u * u * u * p3.y,
+  };
+}
+
+function drawPackets(t) {
+  const rows = layoutLog(t);
+  for (const l of LINES) {
+    if (!l.lane) continue;
+    const row = rows.find(r => r.line === l);
+    const ly = row ? clamp(row.y + LH / 2, LOG.y, LOG.y + LOG.h) : LOG.y + LOG.h;
+    const lb = laneBox(laneIndex(l.lane));
+    const A = { x: LEFT.x + LEFT.w - 2, y: ly }, B = { x: lb.x + 2, y: lb.y + lb.h / 2 };
+    const ctrl1 = { x: A.x + 40, y: A.y }, ctrl2 = { x: B.x - 40, y: B.y };
+    // cyan packet out to the lane, verdict-coloured packet back to the log line
+    const path = (u, rev) => rev ? bezier(B, ctrl2, ctrl1, A, u) : bezier(A, ctrl1, ctrl2, B, u);
+    const flow = (t0, t1, color, rev) => {
+      if (t < t0 || t > t1 + 0.25) return;
+      const head = (t - t0) / (t1 - t0);
+      // faint wire
+      ctx.strokeStyle = alpha(color, 0.18 * (1 - seg(t, t1, t1 + 0.25))); ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i <= 30; i++) { const p = path(i / 30, rev); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
+      ctx.stroke();
+      for (let k = 12; k >= 0; k--) {
+        const u = head - k * 0.04; if (u < 0 || u > 1) continue;
+        const p = path(eio(u), rev);
+        ctx.fillStyle = alpha(color, (1 - k / 13) * 0.9);
+        ctx.beginPath(); ctx.arc(p.x, p.y, k === 0 ? 4.5 : 3 - k * 0.15, 0, 7); ctx.fill();
+      }
+      if (head <= 1) { const p = path(eio(head), rev); glow(color, 16); ctx.fillStyle = '#e6fbff'; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 7); ctx.fill(); noGlow(); }
+    };
+    flow(l.send, l.arrive, C.cyan, false);
+    flow(l.vt, l.back, VERDICT[l.verdict], true);
+  }
+}
+
+function drawContext(t) {
+  const P = { x: LEFT.x, y: LEFT.y + LEFT.h + 16, w: RIGHT.x + RIGHT.w - LEFT.x, h: 118 };
+  ctx.fillStyle = C.pane; rr(P.x, P.y, P.w, P.h, 8); ctx.fill();
+  ctx.strokeStyle = C.border; rr(P.x + .5, P.y + .5, P.w - 1, P.h - 1, 8); ctx.stroke();
+  const total = BLOCKS.reduce((s, b) => s + blockTok(b, t), 0);
+  font(12.5, 'bold'); ctx.textBaseline = 'middle'; ctx.fillStyle = C.text;
+  ctx.fillText('CONTEXT WINDOW', P.x + 14, P.y + 20);
+  font(12); ctx.fillStyle = C.dim;
+  ctx.fillText('what the main LLM re-reads every step', P.x + 148, P.y + 20);
+  const compressing = t >= COMPRESS_T0 && t < COMPRESS_T1 + 0.3;
+  const over = total > 36000 && t < COMPRESS_T0 + 0.6;
+  font(15, 'bold'); ctx.textAlign = 'right';
+  ctx.fillStyle = over ? C.amber : (t > COMPRESS_T1 ? C.green : C.text);
+  ctx.fillText((total / 1000).toFixed(1) + 'k tokens', P.x + P.w - 14, P.y + 20);
+  ctx.textAlign = 'left';
+
+  const BX = P.x + 14, BY = P.y + 42, BW = P.w - 28, BH = 30;
+  const scale = BW / 43000;
+  ctx.fillStyle = 'rgba(255,255,255,0.025)'; rr(BX, BY, BW, BH, 5); ctx.fill();
+  // threshold marker
+  const thx = BX + 36000 * scale;
+  ctx.strokeStyle = alpha(C.amber, 0.55); ctx.setLineDash([4, 4]); ctx.beginPath();
+  ctx.moveTo(thx, BY - 6); ctx.lineTo(thx, BY + BH + 6); ctx.stroke(); ctx.setLineDash([]);
+  font(10.5); ctx.fillStyle = alpha(C.amber, 0.75); ctx.textAlign = 'center';
+  ctx.fillText('compress threshold', thx, BY + BH + 16); ctx.textAlign = 'left';
+
+  let x = BX;
+  for (const b of BLOCKS) {
+    const tok = blockTok(b, t); if (tok < 1) continue;
+    const w = tok * scale;
+    let col = BLOCK_COLOR[b.kind], a = 0.55;
+    if (b.trim && t >= b.trimAt) { const p = seg(t, b.trimAt, b.trimAt + 0.45); col = p < 0.5 ? C.red : '#334155'; a = lerp(0.8, 0.5, p); }
+    if (!b.trim && t >= COMPRESS_T1 - 0.1 && t < COMPRESS_T1 + 0.9) { const p = 1 - seg(t, COMPRESS_T1, COMPRESS_T1 + 0.9); a = 0.55 + 0.35 * p; if (b.kind === 'tool') col = C.green; }
+    if (b.picked && t >= PICK_T + 0.4 && t < PICK_T + 1.1) col = C.green;
+    ctx.fillStyle = alpha(col, a);
+    rr(x + 1, BY + 2, Math.max(1, w - 2), BH - 4, 3); ctx.fill();
+    if (w > 48) {
+      font(10.5); ctx.fillStyle = 'rgba(5,7,10,0.85)';
+      const lbl = { sys: 'system', user: 'user', asst: 'asst', tool: 'tool' }[b.kind];
+      ctx.fillText(w > 90 ? lbl + ' ' + (tok / 1000).toFixed(1) + 'k' : lbl, x + 6, BY + BH / 2 + 0.5);
+    }
+    x += w;
+  }
+  // scissors sweep during compression
+  if (compressing) {
+    const p = seg(t, COMPRESS_T0, COMPRESS_T1);
+    const sx = BX + p * (x - BX);
+    glow(C.cyan, 14); ctx.strokeStyle = C.cyan; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(sx, BY - 4); ctx.lineTo(sx, BY + BH + 4); ctx.stroke(); noGlow();
+    font(14); ctx.fillStyle = C.cyan; ctx.fillText('✂', sx - 6, BY - 12);
+  }
+  // legend / note
+  font(11.5); ctx.textBaseline = 'middle';
+  const note = t < PICK_T ? '' : t < 8.6 ? 'search picker: off-topic results never enter the context'
+    : t < COMPRESS_T0 ? 'over the threshold: asking the decision model what to drop'
+    : t < COMPRESS_T1 + 0.2 ? 'jev compressor: dropping stale tool output, no LLM-written summary'
+    : 'relevant content kept  ·  39.2k → 22.1k tokens in 262 ms';
+  ctx.fillStyle = t > COMPRESS_T1 ? C.green : C.cyan;
+  ctx.globalAlpha = note ? 1 : 0;
+  ctx.fillText(note, BX, BY + BH + 16);
+  ctx.globalAlpha = 1;
+}
+
+function drawIntro(t) {
+  const a = 1 - seg(t, 0.55, 0.95);
+  if (a <= 0) return;
+  ctx.fillStyle = `rgba(5,7,10,${0.94 * a})`; ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = a * seg(t, 0, 0.2);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  font(46, 'bold'); glow(alpha(C.cyan, 0.6), 24); ctx.fillStyle = C.cyan;
+  ctx.fillText('jevcontrol-hermes', W / 2, H / 2 - 18); noGlow();
+  font(17); ctx.fillStyle = '#9aa8b8';
+  ctx.fillText('a small decision model for Hermes Agent', W / 2, H / 2 + 30);
+  ctx.globalAlpha = 1; ctx.textAlign = 'left';
+}
+
+function drawOutro(t) {
+  const a = seg(t, 11.55, 12.05);
+  if (a <= 0) return;
+  ctx.fillStyle = `rgba(5,7,10,${0.96 * a})`; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const l1 = eo(seg(t, 11.9, 12.4)), l2 = eo(seg(t, 12.55, 13.05)), l3 = eo(seg(t, 13.3, 13.7));
+  ctx.globalAlpha = l1; font(42, 'bold'); ctx.fillStyle = '#eef3f8';
+  ctx.fillText('Let the big model think.', W / 2, H / 2 - 52 + (1 - l1) * 14);
+  ctx.globalAlpha = l2; font(32, 'bold'); glow(alpha(C.cyan, 0.55), 22); ctx.fillStyle = C.cyan;
+  ctx.fillText('Let the small model handle routine decisions.', W / 2, H / 2 + 8 + (1 - l2) * 14); noGlow();
+  ctx.globalAlpha = l3;
+  ctx.strokeStyle = C.border; ctx.beginPath(); ctx.moveTo(W / 2 - 220, H / 2 + 66); ctx.lineTo(W / 2 + 220, H / 2 + 66); ctx.stroke();
+  font(15, 'bold'); ctx.fillStyle = C.text;
+  ctx.fillText('jevcontrol-hermes', W / 2, H / 2 + 96);
+  font(13); ctx.fillStyle = C.dim;
+  ctx.fillText('a plugin for Hermes Agent  ·  github.com/abhishek085/jevcontrol-hermes', W / 2, H / 2 + 122);
+  ctx.globalAlpha = 1; ctx.textAlign = 'left';
+}
+
+function drawFrame(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  noGlow(); ctx.globalAlpha = 1; ctx.lineWidth = 1;
+  drawBackground(t);
+  drawWindow(t);
+  drawLog(t);
+  drawLanes(t);
+  drawContext(t);
+  drawPackets(t);
+  drawIntro(t);
+  drawOutro(t);
+}
+window.drawFrame = drawFrame;
+window.DURATION = DURATION;
+
+if (!new URLSearchParams(location.search).has('capture')) {
+  const start = performance.now();
+  const tick = now => { drawFrame(((now - start) / 1000) % DURATION); requestAnimationFrame(tick); };
+  document.fonts.ready.then(() => requestAnimationFrame(tick));
+}
+</script>
+</body>
+</html>
