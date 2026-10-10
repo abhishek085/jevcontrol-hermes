@@ -1,0 +1,481 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>jevcontrol-hermes demo</title>
+<style>
+  html, body { margin: 0; background: #070a0e; }
+  canvas { display: block; margin: 0 auto; max-width: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1280" height="720"></canvas>
+<script>
+// 15-second animated demo of jevcontrol-hermes.
+// render(t) is pure in t (seconds), so frames can be captured deterministically
+// by docs/demo/render.js. Opening this file in a browser plays it live.
+
+const W = 1280, H = 720, DURATION = 15;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+const C = {
+  bg: '#070a0e', panel: '#0d1218', panel2: '#111821', border: '#1d2733',
+  text: '#c9d4df', dim: '#5d6b7a', faint: '#2a3542',
+  cyan: '#22d3ee', green: '#22c55e', red: '#ef4444', amber: '#f59e0b', white: '#f2f6fa',
+};
+const MONO = '"DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace';
+const SANS = '"DejaVu Sans", "Liberation Sans", Helvetica, Arial, sans-serif';
+
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const easeOut = k => 1 - Math.pow(1 - k, 3);
+const easeInOut = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const fadeIO = (t, a, b, f = .25) => Math.min(prog(t, a, a + f), 1 - prog(t, b - f, b));
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function box(x, y, w, h, r, fill, stroke) {
+  rr(x, y, w, h, r);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+}
+function txt(s, x, y, { size = 15, color = C.text, font = MONO, weight = '', align = 'left', alpha = 1 } = {}) {
+  ctx.globalAlpha = alpha;
+  ctx.font = `${weight} ${size}px ${font}`;
+  ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'middle';
+  ctx.fillText(s, x, y);
+  ctx.globalAlpha = 1;
+  return ctx.measureText(s).width;
+}
+function glow(color, blur, fn) {
+  ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = blur; fn(); ctx.restore();
+}
+function badge(label, x, y, color, k, { size = 14, right = false } = {}) {
+  // A verdict pill that pops in with scale k (0..1).
+  if (k <= 0) return 0;
+  ctx.font = `bold ${size}px ${MONO}`;
+  const w = ctx.measureText(label).width + 18, h = size + 12;
+  const s = easeOut(k) * (1 + .25 * Math.sin(Math.PI * clamp(k * 1.4)));
+  const bx = right ? x - w : x;
+  ctx.save();
+  ctx.translate(bx + w / 2, y); ctx.scale(s, s);
+  glow(color, 14 * k, () => box(-w / 2, -h / 2, w, h, 6, color + '26', color));
+  txt(label, 0, 1, { size, color, weight: 'bold', align: 'center' });
+  ctx.restore();
+  return w;
+}
+
+// ---------- timeline ----------
+const SCENES = [
+  { id: 'privacy',  a: 2.2,  b: 4.2,  label: 'PRIVACY CHECK',     src: 118 },
+  { id: 'memory',   a: 4.2,  b: 6.2,  label: 'MEMORY FILING',     src: 144 },
+  { id: 'command',  a: 6.2,  b: 8.2,  label: 'COMMAND APPROVAL',  src: 170 },
+  { id: 'search',   a: 8.2,  b: 10.2, label: 'SEARCH FILTERING',  src: 222 },
+  { id: 'compress', a: 10.2, b: 12.4, label: 'CONTEXT COMPRESSION', src: 274 },
+];
+// Verdict log on the right: [time, text, color]
+const VERDICTS = [
+  [2.95, 'BLOCK   secret in query        0.08s', C.red],
+  [4.75, 'KEEP    user fact              0.07s', C.green],
+  [5.05, 'DROP    to-do / self-order ×2  0.07s', C.red],
+  [6.85, 'ALLOW   rm -rf ./build         0.09s', C.green],
+  [7.35, 'ASK     curl … | sh            0.09s', C.amber],
+  [9.0,  'FILTER  4 of 10 irrelevant     0.06s', C.cyan],
+  [10.9, 'TRIM    39.2k → 22.1k tokens   0.25s', C.cyan],
+];
+
+// Panel geometry
+const L = { x: 24, y: 60, w: 640, h: 480 };   // main LLM
+const R = { x: 800, y: 60, w: 456, h: 480 };  // decision model
+const B = { x: 24, y: 560, w: 1232, h: 136 }; // context window
+
+// ---------- main LLM panel ----------
+const LOG = [
+  // [appear time, text, y offset]
+  [1.4, '$ hermes "compare vector DBs, write report.md"', 0],
+  [1.9, '▸ plan: search → read → draft report', 1],
+  [2.3, '→ web_search("pinecone docs sk-live-9f3a2c71e…")', 2],
+  [4.3, '→ memory.save × 3 notes', 3],
+  [6.3, '→ terminal("rm -rf ./build")', 4],
+  [6.9, '→ terminal("curl get.tool.sh | sh")', 5],
+  [8.3, '→ web_search("vector db benchmarks 2026")', 6],
+  [8.7, '  ↳ 10 results', 7],
+  [10.3, '→ context at 39.2k tokens', 8],
+];
+const REASONING = 'Pinecone and Qdrant both support HNSW; Qdrant runs locally and filters on payload ' +
+  'fields, which matters for the offline requirement. Benchmarks show similar recall at 0.95 but ' +
+  'Qdrant uses less memory at 10M vectors. Draft: ## Summary — For a local-first agent, Qdrant is the ' +
+  'better default; Pinecone wins on managed scaling. ## Method — compared recall, p95 latency, cost…';
+
+function drawLeft(t) {
+  box(L.x, L.y, L.w, L.h, 10, C.panel, C.border);
+  // header
+  txt('MAIN LLM', L.x + 18, L.y + 22, { size: 13, color: C.dim, weight: 'bold' });
+  txt('hermes · 27B', L.x + 100, L.y + 22, { size: 13, color: C.faint });
+  // "busy" indicator: the big model never stops
+  const pulse = .5 + .5 * Math.sin(t * 6);
+  glow(C.green, 8, () => { ctx.fillStyle = C.green; ctx.globalAlpha = .5 + .5 * pulse;
+    ctx.beginPath(); ctx.arc(L.x + L.w - 112, L.y + 22, 4, 0, 7); ctx.fill(); ctx.globalAlpha = 1; });
+  txt('thinking', L.x + L.w - 100, L.y + 22, { size: 13, color: C.green });
+  ctx.fillStyle = C.border; ctx.fillRect(L.x, L.y + 42, L.w, 1);
+
+  // tool-call log
+  const lx = L.x + 18, ly0 = L.y + 66, lh = 26;
+  for (const [ta, s, i] of LOG) {
+    if (t < ta) continue;
+    const k = prog(t, ta, ta + .35);
+    const n = Math.floor(s.length * k);
+    let line = s.slice(0, n);
+    let color = i === 0 ? C.white : i === 1 ? C.dim : C.text;
+    const y = ly0 + i * lh;
+    if (i === 2) {
+      // secret gets redacted after the verdict
+      const red = prog(t, 3.0, 3.3);
+      if (red > 0) {
+        const pre = '→ web_search("pinecone docs ';
+        const w0 = txt(pre, lx, y, { size: 14, color });
+        txt('[REDACTED]', lx + w0, y, { size: 14, color: C.red, alpha: red });
+        txt('")', lx + w0 + ctx.measureText('[REDACTED]').width, y, { size: 14, color, alpha: red });
+        if (red < 1) txt('sk-live-9f3a2c71e…', lx + w0, y, { size: 14, color: C.red, alpha: 1 - red });
+        continue;
+      }
+    }
+    if (i === 8 && t > 10.9) {
+      const k2 = prog(t, 10.9, 11.6);
+      const tok = lerp(39.2, 22.1, easeInOut(k2)).toFixed(1);
+      line = `→ context at ${tok}k tokens`;
+      if (k2 >= 1) line += '  ✓ trimmed';
+    }
+    txt(line, lx, y, { size: 14, color });
+  }
+  // "main LLM continues" — reasoning stream at the bottom, typing the whole time
+  const ry = L.y + 318;
+  ctx.fillStyle = C.border; ctx.fillRect(L.x, ry - 14, L.w, 1);
+  txt('reasoning stream', lx, ry + 4, { size: 12, color: C.dim });
+  const chars = Math.floor(clamp((t - 1.6) / 11) * REASONING.length);
+  const wrap = wrapText(REASONING.slice(0, chars), 66);
+  const lines = wrap.slice(-5);
+  lines.forEach((ln, j) => txt(ln, lx, ry + 30 + j * 22, { size: 13.5, color: '#93a4b5' }));
+  if (t > 1.6 && t < 12.6 && Math.floor(t * 2.5) % 2 === 0) {
+    const last = lines[lines.length - 1] || '';
+    ctx.font = `13.5px ${MONO}`;
+    const cx = lx + ctx.measureText(last).width + 2;
+    ctx.fillStyle = C.cyan; ctx.fillRect(cx, ry + 30 + (lines.length - 1) * 22 - 8, 8, 16);
+  }
+}
+function wrapText(s, n) {
+  const words = s.split(' '), out = []; let cur = '';
+  for (const w of words) {
+    if ((cur + ' ' + w).trim().length > n) { out.push(cur); cur = w; } else cur = (cur + ' ' + w).trim();
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// ---------- decision model panel ----------
+function drawRight(t) {
+  box(R.x, R.y, R.w, R.h, 10, C.panel, C.border);
+  txt('DECISION MODEL', R.x + 18, R.y + 22, { size: 13, color: C.cyan, weight: 'bold' });
+  txt('small · local · ~0.1s', R.x + 150, R.y + 22, { size: 13, color: C.faint });
+  const done = VERDICTS.filter(v => t >= v[0]).length;
+  txt(`${done} decisions`, R.x + R.w - 18, R.y + 22, { size: 13, color: C.dim, align: 'right' });
+  ctx.fillStyle = C.border; ctx.fillRect(R.x, R.y + 42, R.w, 1);
+
+  // active scene card
+  const cx = R.x + 16, cy = R.y + 58, cw = R.w - 32, ch = 230;
+  for (const sc of SCENES) {
+    const a = fadeIO(t, sc.a + .15, sc.b, .25);
+    if (a <= 0) continue;
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.translate(0, (1 - easeOut(prog(t, sc.a + .15, sc.a + .45))) * 14);
+    box(cx, cy, cw, ch, 8, C.panel2, C.border);
+    txt(sc.label, cx + 14, cy + 20, { size: 12, color: C.cyan, weight: 'bold' });
+    SCENE_DRAW[sc.id](t, cx, cy, cw, ch, a);
+    ctx.restore();
+  }
+
+  // verdict log
+  const vy0 = R.y + 310;
+  txt('verdicts', cx, vy0, { size: 12, color: C.dim });
+  const shown = VERDICTS.filter(v => t >= v[0]).slice(-6);
+  shown.forEach(([tv, s, col], j) => {
+    const k = prog(t, tv, tv + .25);
+    const y = vy0 + 24 + j * 24;
+    ctx.globalAlpha = k;
+    ctx.fillStyle = col; ctx.fillRect(cx, y - 7, 3, 14);
+    ctx.globalAlpha = 1;
+    txt(s, cx + 12 - (1 - k) * 10, y, { size: 13, color: col === C.cyan ? C.text : col, alpha: k });
+  });
+}
+
+function thinkingDots(t, x, y, until) {
+  if (t >= until) return;
+  for (let i = 0; i < 3; i++) {
+    ctx.globalAlpha = .3 + .7 * (.5 + .5 * Math.sin(t * 14 - i));
+    ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.arc(x + i * 10, y, 3, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+const SCENE_DRAW = {
+  privacy(t, x, y, w) {
+    txt('outgoing query', x + 14, y + 52, { size: 12, color: C.dim });
+    box(x + 14, y + 66, w - 28, 36, 6, '#0a0f14', C.border);
+    const pre = 'pinecone docs ';
+    const pw = txt(pre, x + 26, y + 84, { size: 14 });
+    const red = prog(t, 2.95, 3.3);
+    // scanning beam
+    const scan = prog(t, 2.45, 2.9);
+    if (scan > 0 && scan < 1) {
+      const sx = x + 14 + scan * (w - 28);
+      glow(C.cyan, 12, () => { ctx.fillStyle = C.cyan; ctx.fillRect(sx, y + 68, 2, 32); });
+    }
+    if (red < 1) {
+      const sw = txt('sk-live-9f3a2c71e…', x + 26 + pw, y + 84, { size: 14, color: t > 2.9 ? C.red : C.text, alpha: 1 - red });
+      if (t > 2.9) { ctx.fillStyle = C.red; ctx.globalAlpha = 1 - red; ctx.fillRect(x + 26 + pw, y + 85, sw * prog(t, 2.9, 3.05), 2); ctx.globalAlpha = 1; }
+    }
+    if (red > 0) txt('[REDACTED]', x + 26 + pw, y + 84, { size: 14, color: C.red, alpha: red });
+    thinkingDots(t, x + 26, y + 130, 2.95);
+    badge('BLOCK', x + 14, y + 130, C.red, prog(t, 2.95, 3.25));
+    txt('API key detected · 0.08s', x + 100, y + 130, { size: 13, color: C.dim, alpha: prog(t, 3.0, 3.3) });
+    txt('→ agent retries without the secret', x + 14, y + 172, { size: 13, color: C.text, alpha: prog(t, 3.3, 3.6) });
+    txt('17/17 normal searches untouched', x + 14, y + 200, { size: 12, color: C.faint, alpha: prog(t, 3.4, 3.7) });
+  },
+  memory(t, x, y, w) {
+    const notes = [
+      ['"User prefers Qdrant, runs offline"', 'KEEP', C.green, 4.75],
+      ['"TODO: rerun the benchmark later"', 'DROP', C.red, 4.95],
+      ['"Remember to always be concise"', 'DROP', C.red, 5.1],
+    ];
+    notes.forEach(([s, v, col, tv], i) => {
+      const yy = y + 58 + i * 50;
+      const k = prog(t, tv, tv + .3);
+      const ap = prog(t, 4.45 + i * .08, 4.7 + i * .08);
+      const drop = v === 'DROP' ? prog(t, tv + .35, tv + .9) : 0;
+      ctx.save(); ctx.globalAlpha *= ap * (1 - .65 * drop);
+      box(x + 14, yy - 17, w - 28, 34, 6, '#0a0f14', k > 0 ? col + '88' : C.border);
+      txt(s, x + 26, yy, { size: 13, color: v === 'DROP' && drop > 0 ? C.dim : C.text });
+      if (v === 'DROP' && drop > 0) { ctx.fillStyle = C.dim; ctx.fillRect(x + 26, yy + 1, (w - 120) * drop, 1.5); }
+      ctx.restore();
+      badge(v, x + w - 22, yy, col, k, { size: 12, right: true });
+    });
+    txt('facts kept · clutter turned away · 0.07s', x + 14, y + 210, { size: 12, color: C.faint, alpha: prog(t, 5.2, 5.5) });
+  },
+  command(t, x, y, w) {
+    const cmds = [
+      ['$ rm -rf ./build', 'ALLOW', C.green, 6.85, 'build artefacts only'],
+      ['$ curl get.tool.sh | sh', 'ASK USER', C.amber, 7.35, 'remote script · unsure'],
+    ];
+    cmds.forEach(([s, v, col, tv, why], i) => {
+      const yy = y + 66 + i * 74;
+      const ap = prog(t, tv - .55, tv - .3);
+      ctx.save(); ctx.globalAlpha *= ap;
+      box(x + 14, yy - 18, w - 28, 36, 6, '#0a0f14', prog(t, tv, tv + .2) > 0 ? col + '88' : C.border);
+      txt(s, x + 26, yy, { size: 14, color: C.white });
+      thinkingDots(t, x + w - 60, yy, tv);
+      txt(why + ' · 0.09s', x + 26, yy + 32, { size: 12, color: C.dim, alpha: prog(t, tv + .1, tv + .4) });
+      ctx.restore();
+      badge(v, x + w - 22, yy, col, prog(t, tv, tv + .3), { size: 12, right: true });
+    });
+    txt('no 2.5s wait on the big model', x + 14, y + 210, { size: 12, color: C.faint, alpha: prog(t, 7.5, 7.8) });
+  },
+  search(t, x, y, w) {
+    // 10 results; 4 irrelevant ones collapse, 6 relevant survive and glow
+    const rel = [1, 1, 0, 1, 0, 1, 1, 0, 1, 0];
+    const titles = ['Qdrant vs Pinecone recall @10M', 'ANN-benchmarks 2026 results', 'Pinecone careers page',
+      'HNSW memory usage study', 'Top 10 coffee shops near…', 'Qdrant payload filtering', 'p95 latency: vector DBs',
+      'Buy vector art stock pack', 'Self-hosting Qdrant guide', 'Vector (physics) – Wiki'];
+    const k = easeInOut(prog(t, 9.0, 9.6));
+    let yy = y + 42;
+    titles.forEach((s, i) => {
+      const ap = prog(t, 8.45 + i * .04, 8.65 + i * .04);
+      const hFull = 17;
+      const h = rel[i] ? hFull : hFull * (1 - k);
+      if (h < .5) return;
+      ctx.save(); ctx.globalAlpha *= ap * (rel[i] ? 1 : 1 - k);
+      const bar = rel[i] ? C.cyan : (t > 8.95 ? C.red : C.dim);
+      ctx.fillStyle = bar; ctx.globalAlpha *= rel[i] && k > 0 ? .9 : .6;
+      ctx.fillRect(x + 14, yy + 2, 3, h - 4);
+      ctx.globalAlpha = ap * (rel[i] ? 1 : 1 - k);
+      if (h > 10) txt(s, x + 26, yy + h / 2, { size: 12.5, color: rel[i] ? (k > 0 ? C.white : C.text) : C.dim });
+      ctx.restore();
+      yy += h;
+    });
+    txt(`10 → ${Math.round(lerp(10, 6, k))} results`, x + w - 18, y + 20, { size: 12, color: C.cyan, align: 'right', alpha: prog(t, 9.0, 9.2) });
+    txt('relevant results survive · agent reads less', x + 14, y + 214, { size: 12, color: C.faint, alpha: prog(t, 9.4, 9.7) });
+  },
+  compress(t, x, y, w) {
+    const blocks = [
+      ['tool: web_search #1 (raw html)', 0], ['tool: terminal ls -la', 0], ['user: task + constraints', 1],
+      ['tool: web_search #2 (raw html)', 0], ['notes: benchmark figures', 1], ['draft: report.md', 1],
+    ];
+    const k = easeInOut(prog(t, 10.9, 11.6));
+    blocks.forEach(([s, keep], i) => {
+      const yy = y + 48 + i * 26;
+      const ap = prog(t, 10.4 + i * .05, 10.6 + i * .05);
+      const full = w - 28;
+      const bw = keep ? full : lerp(full, 64, k);
+      ctx.save(); ctx.globalAlpha *= ap;
+      box(x + 14, yy - 11, bw, 22, 4, keep ? C.cyan + '22' : (k > 0 ? C.faint + '55' : '#16202b'), keep ? C.cyan + '99' : C.border);
+      if (keep) txt(s, x + 24, yy, { size: 12, color: C.text });
+      else if (k < .6) txt(s, x + 24, yy, { size: 12, color: C.dim, alpha: 1 - k / .6 });
+      else txt('[trimmed]', x + 22, yy, { size: 11, color: C.dim, alpha: (k - .6) / .4 });
+      ctx.restore();
+    });
+    badge('TRIM', x + 14, y + 210, C.cyan, prog(t, 10.9, 11.2), { size: 12 });
+    txt('old tool output out · 0.25s · no summary wait', x + 82, y + 212, { size: 12, color: C.dim, alpha: prog(t, 11.1, 11.4) });
+  },
+};
+
+// ---------- flows between panels ----------
+function drawFlows(t) {
+  const x0 = L.x + L.w, x1 = R.x;
+  // idle lane
+  ctx.strokeStyle = C.faint; ctx.setLineDash([3, 6]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x0 + 8, 200); ctx.lineTo(x1 - 8, 200); ctx.stroke(); ctx.setLineDash([]);
+  txt('hooks', (x0 + x1) / 2, 186, { size: 11, color: C.faint, align: 'center', alpha: prog(t, 1.4, 1.8) });
+
+  const verdictColor = { privacy: C.red, memory: C.green, command: C.green, search: C.cyan, compress: C.cyan };
+  for (const sc of SCENES) {
+    const ys = L.y + sc.src, yd = R.y + 160;
+    // outbound: request flies to the small model
+    for (let p = 0; p < 7; p++) {
+      const k = prog(t, sc.a + .05 + p * .05, sc.a + .45 + p * .05);
+      if (k <= 0 || k >= 1) continue;
+      const e = easeInOut(k);
+      const px = lerp(x0 - 30, x1 + 10, e), py = lerp(ys, yd, e) - Math.sin(e * Math.PI) * 18;
+      glow(C.cyan, 12, () => { ctx.fillStyle = C.cyan; ctx.globalAlpha = 1 - p * .1;
+        ctx.beginPath(); ctx.arc(px, py, 3.2 - p * .3, 0, 7); ctx.fill(); ctx.globalAlpha = 1; });
+    }
+    // inbound: verdict returns to the agent
+    const tv = VERDICTS.find(v => v[0] >= sc.a && v[0] < sc.b)[0];
+    const col = verdictColor[sc.id];
+    for (let p = 0; p < 5; p++) {
+      const k = prog(t, tv + .1 + p * .04, tv + .45 + p * .04);
+      if (k <= 0 || k >= 1) continue;
+      const e = easeInOut(k);
+      const px = lerp(x1 + 10, x0 - 30, e), py = lerp(yd, ys, e) + Math.sin(e * Math.PI) * 18;
+      glow(col, 12, () => { ctx.fillStyle = col; ctx.globalAlpha = 1 - p * .15;
+        ctx.beginPath(); ctx.arc(px, py, 3.2 - p * .3, 0, 7); ctx.fill(); ctx.globalAlpha = 1; });
+    }
+    // highlight source line in the log while the scene is active
+    const a = fadeIO(t, sc.a, sc.b, .2);
+    if (a > 0) {
+      ctx.globalAlpha = a * .9;
+      ctx.fillStyle = C.cyan; ctx.fillRect(L.x + 6, ys - 9, 3, 18);
+      ctx.globalAlpha = a * .07; ctx.fillRect(L.x + 6, ys - 12, L.w - 12, 24);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+// ---------- context window bar ----------
+function tokensAt(t) {
+  if (t < 10.9) return lerp(18, 39.2, clamp((t - 1.4) / 9.5));
+  if (t < 11.6) return lerp(39.2, 22.1, easeInOut(prog(t, 10.9, 11.6)));
+  return lerp(22.1, 23.4, prog(t, 11.6, 13));
+}
+function drawContext(t) {
+  box(B.x, B.y, B.w, B.h, 10, C.panel, C.border);
+  txt('CONTEXT WINDOW', B.x + 18, B.y + 22, { size: 13, color: C.dim, weight: 'bold' });
+  const tok = tokensAt(t);
+  const trimming = t > 10.9 && t < 11.7;
+  txt(`${tok.toFixed(1)}k tokens`, B.x + B.w - 18, B.y + 22,
+    { size: 14, color: trimming ? C.cyan : C.text, align: 'right', weight: 'bold' });
+
+  // segments: [kind, share of tokens at 39.2k, keep?]
+  const segs = [['sys', 2.0, 1], ['user', 1.6, 1], ['web #1', 7.5, 0], ['ls', 2.6, 0], ['notes', 4.2, 1],
+    ['web #2', 7.0, 0], ['reasoning', 6.8, 1], ['draft', 7.5, 1]];
+  const maxTok = 44, bx = B.x + 18, by = B.y + 52, bw = B.w - 36, bh = 34;
+  box(bx, by, bw, bh, 6, '#0a0f14', C.border);
+  const growth = clamp(tok / 39.2);
+  const k = easeInOut(prog(t, 10.9, 11.6));
+  let x = bx + 2;
+  for (const [name, share, keep] of segs) {
+    let tk = share * (t < 10.9 ? growth : 1);
+    if (!keep) tk = lerp(tk, share * .1, k);
+    const w = (tk / maxTok) * (bw - 4);
+    if (w < 1) continue;
+    const col = keep ? C.cyan : (k > 0 ? C.red : '#3b4a5a');
+    ctx.globalAlpha = keep ? .55 : (k > 0 ? .5 * (1 - k) + .25 : .9);
+    rr(x, by + 3, w - 2, bh - 6, 4); ctx.fillStyle = col; ctx.fill();
+    ctx.globalAlpha = 1;
+    if (w > 54) txt(name, x + 8, by + bh / 2, { size: 12, color: keep ? C.white : C.dim });
+    x += w;
+  }
+  // limit marker
+  const lx = bx + (40 / maxTok) * (bw - 4);
+  ctx.fillStyle = C.amber; ctx.globalAlpha = .7; ctx.fillRect(lx, by - 4, 2, bh + 8); ctx.globalAlpha = 1;
+  txt('budget', lx, by + bh + 16, { size: 11, color: C.amber, align: 'center', alpha: .8 });
+  const note = t < 10.9 ? 'unneeded tool output piling up…' : '39.2k → 22.1k in 0.25s · relevant content kept';
+  txt(note, bx, by + bh + 22, { size: 13, color: t < 10.9 ? C.dim : C.cyan, alpha: prog(t, 1.6, 2) });
+}
+
+// ---------- header, intro, outro ----------
+function drawHeader(t) {
+  ['#ff5f57', '#febc2e', '#28c840'].forEach((c, i) => {
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(36 + i * 20, 30, 6, 0, 7); ctx.fill();
+  });
+  txt('hermes-agent  +  jevcontrol-hermes', 104, 30, { size: 14, color: C.dim });
+  const done = VERDICTS.filter(v => t >= v[0]).length;
+  txt(`big model paused: 0s   ·   routine decisions: ${done}`, W - 24, 30, { size: 13, color: C.dim, align: 'right' });
+}
+
+function drawIntro(t) {
+  const a = 1 - prog(t, 1.0, 1.5);
+  if (a <= 0) return;
+  ctx.fillStyle = C.bg; ctx.globalAlpha = a; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+  const k = easeOut(prog(t, 0, .6));
+  glow(C.cyan, 24, () => txt('jevcontrol-hermes', W / 2, H / 2 - 22 + (1 - k) * 12,
+    { size: 54, color: C.white, weight: 'bold', align: 'center', alpha: a * k }));
+  txt('a decision-model plugin for Hermes Agent', W / 2, H / 2 + 34,
+    { size: 20, color: C.cyan, align: 'center', alpha: a * prog(t, .25, .75) });
+}
+
+function drawOutro(t) {
+  const a = prog(t, 12.4, 13.0);
+  if (a <= 0) return;
+  ctx.fillStyle = C.bg; ctx.globalAlpha = a * .94; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+  const k1 = easeOut(prog(t, 12.7, 13.3)), k2 = easeOut(prog(t, 13.2, 13.8));
+  txt('Let the big model think.', W / 2, H / 2 - 40 + (1 - k1) * 14,
+    { size: 44, color: C.white, weight: 'bold', align: 'center', font: SANS, alpha: k1 });
+  glow(C.cyan, 18, () => txt('Let the small model handle routine decisions.', W / 2, H / 2 + 26 + (1 - k2) * 14,
+    { size: 36, color: C.cyan, weight: 'bold', align: 'center', font: SANS, alpha: k2 }));
+  txt('jevcontrol-hermes  ·  plugin for Hermes Agent', W / 2, H / 2 + 110,
+    { size: 16, color: C.dim, align: 'center', alpha: prog(t, 13.8, 14.3) });
+}
+
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  // subtle scanlines
+  ctx.fillStyle = '#ffffff'; ctx.globalAlpha = .012;
+  for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+  ctx.globalAlpha = 1;
+  drawHeader(t);
+  drawLeft(t);
+  drawRight(t);
+  drawFlows(t);
+  drawContext(t);
+  drawIntro(t);
+  drawOutro(t);
+}
+window.render = render;
+window.DURATION = DURATION;
+
+// Live playback when opened directly (render.js sets ?capture=1 to drive frames itself).
+if (!new URLSearchParams(location.search).has('capture')) {
+  let t0 = null;
+  const loop = ts => { if (t0 === null) t0 = ts; render(((ts - t0) / 1000) % DURATION); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+} else {
+  render(0);
+}
+</script>
+</body>
+</html>
