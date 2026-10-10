@@ -9,6 +9,10 @@ It stops secrets leaking, keeps memory clean and approves safe commands in a ten
 ![hermes](https://img.shields.io/badge/Hermes%20Agent-plugin-7c3aed)
 ![status](https://img.shields.io/badge/status-beta-orange)
 
+![jevcontrol-hermes demo: a small decision model handles privacy checks, memory filing, command approvals, search filtering and context trimming while the main LLM keeps working](docs/demo/demo.gif)
+
+<sub>15-second animated demo · [MP4 version](docs/demo/demo.mp4) · an illustration, not a screen recording ([source](docs/demo/demo.html))</sub>
+
 [In plain words](#in-plain-words) · [Results](#what-it-does-for-you-results-in-plain-language) · [Quick start](#quick-start) · [Features](#what-you-get) · [How it works](#how-it-works) · [Troubleshooting](#troubleshooting) · [Credits](#credits)
 
 </div>
